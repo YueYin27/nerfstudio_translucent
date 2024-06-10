@@ -87,7 +87,7 @@ Detailed instructions can be found [here](https://github.com/nerfstudio-project/
 ```
 "C:\Program Files (x86)\Microsoft Visual Studio\2017\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
 ```
-to make your msvc change to x64 before any installation steps. The reason can be found on [here](https://stackoverflow.com/questions/12843846/problems-when-running-nvcc-from-command-line%5B/url%5D).
+to make your msvc change to x64 before any installation steps. The reason can be found [here](https://stackoverflow.com/questions/12843846/problems-when-running-nvcc-from-command-line%5B/url%5D).
 
 #### 2) Train the model
 
