@@ -188,3 +188,6 @@ camera_paths/
 */**/.DS_Store
 */**/._.DS_Store
 
+# ignore all .sh files and .xml files
+*.sh
+*.xml
