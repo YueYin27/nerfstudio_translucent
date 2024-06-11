@@ -2,31 +2,6 @@
 
 <img src="https://github.com/YueYin27/nerfstudio_for_engn8501/assets/65449627/48e6652a-de05-42f8-951f-31fa84226011" width="100%"/>
 
-<table border="0" style="border: none;">
-
-  <tr>
-    <td>
-      <img src="https://github.com/YueYin27/nerfstudio_for_engn8501/blob/main/media/nerfacto.gif" alt="Nerfacto" width="100%" />
-      <p align="center">Nerfacto</p>
-    </td>
-    <td>
-      <img src="https://github.com/YueYin27/nerfstudio_for_engn8501/blob/main/media/tensorf.gif" alt="TensoRF" width="100%" />
-      <p align="center">TensoRF</p>
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <img src="https://github.com/YueYin27/nerfstudio_for_engn8501/blob/main/media/mipnerf.gif" alt="Mip-NeRF" width="100%" />
-      <p align="center">Mip-NeRF</p>
-    </td>
-    <td>
-      <img src="https://github.com/YueYin27/nerfstudio_for_engn8501/blob/main/media/ours.gif" alt="Ours" width="100%" />
-      <p align="center">Ours</p>
-    </td>
-  </tr>
-</table>
-
-
 ## Table of Contents
 
 [Code Description](#1-code-description)
