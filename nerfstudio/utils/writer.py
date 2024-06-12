@@ -302,6 +302,7 @@ class WandbWriter(Writer):
     def __init__(self, log_dir: Path, experiment_name: str, project_name: str = "nerfstudio-project"):
         wandb.init(
             project=os.environ.get("WANDB_PROJECT", project_name),
+            entity="nerfstudio-translucent",
             dir=os.environ.get("WANDB_DIR", str(log_dir)),
             name=os.environ.get("WANDB_NAME", experiment_name),
             reinit=True,
