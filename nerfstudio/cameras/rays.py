@@ -30,7 +30,7 @@ from nerfstudio.utils.math import Gaussians, conical_frustum_to_gaussian
 from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
-mesh = trimesh.load_mesh('/home/projects/u7543832/nerfstudio_translucent/nerfstudio/cameras/water.ply')
+mesh = trimesh.load_mesh('water.ply')
 
 
 @dataclass
