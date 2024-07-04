@@ -4,7 +4,12 @@ conda activate nerfstudio
 
 ssh -L7535:127.0.0.1:22 DUG_ANU
 scp -r filename DUG_ANU:/data/anu_nerftlo/nerfstudio/data/customized/
-data\customized\waterball_cube_pattern_opaque
+scp -rp filename u7535192@cluster1.cecs.anu.edu.au:/home/projects/u7535192/projects/
+
+srun -p teaching --gres=gpu:1 -t 24:00:00 --constraint="nvidia535" --pty bash
+singularity shell --nv /opt/apps/containers/conda/conda-nvidia-22.04-latest.sif
+source /home/projects/u7535192/anaconda3/etc/profile.d/conda.sh
+
 ################################################ generate dataset ###############################################
 
 dataset name format: data_bg_light_sampling_objstatus (e.g. syringe_skydome_sun_sphere_trans)
