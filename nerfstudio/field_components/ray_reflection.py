@@ -53,18 +53,30 @@ class RayReflection:
 
         # Calculate the cosine of the angle of incidence
         cos_theta_i = -torch.einsum('ijk,ijk->ij', l, normals)
+        cos_theta_i = torch.clamp(cos_theta_i, -1.0, 1.0)  # Ensure values are within valid range
+
         sin_theta_i_squared = 1 - cos_theta_i ** 2
 
         # Calculate the sine of the refraction angle using Snell's law
         sin_theta_t_squared = r ** 2 * sin_theta_i_squared
+        sin_theta_t_squared = torch.clamp(sin_theta_t_squared, 0.0, 1.0)  # Ensure values are within valid range
         cos_theta_t = torch.sqrt(1 - sin_theta_t_squared)
 
+        # Handle cases where sin_theta_t_squared > 1 due to numerical precision issues
+        cos_theta_t = torch.nan_to_num(cos_theta_t, nan=0.0)  # Replace NaNs with zeroes
+
+        # Add small epsilon to denominators to avoid division by zero
+        epsilon = 1e-6
+
         # Calculate Rs and Rp using the Fresnel equations
-        Rs = ((r * cos_theta_i - cos_theta_t) / (r * cos_theta_i + cos_theta_t)) ** 2
-        Rp = ((r * cos_theta_t - cos_theta_i) / (cos_theta_i + r * cos_theta_t)) ** 2
+        Rs = ((r * cos_theta_i - cos_theta_t) / (r * cos_theta_i + cos_theta_t + epsilon)) ** 2
+        Rp = ((r * cos_theta_t - cos_theta_i) / (cos_theta_i + r * cos_theta_t + epsilon)) ** 2
 
         # Calculate the average reflectance
         R = (Rs + Rp) / 2
+
+        # Handle any remaining NaNs
+        R = torch.nan_to_num(R, nan=0.0)
 
         return R
 

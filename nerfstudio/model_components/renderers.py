@@ -158,7 +158,7 @@ class RGBRenderer(nn.Module):
             ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions,
                                            ray_samples.frustums.get_positions(), 1.0 / 1.33)
             R = ray_reflection.fresnel_fn(normals)[:, 0].unsqueeze(1)  # [4096]
-            R = torch.where(torch.isnan(R), torch.tensor(0.1, device=R.device), R)
+            # R = torch.where(torch.isnan(R), torch.tensor(0, device=R.device), R)  # mask nan values
             # R = torch.full((weights.shape[0], 1), 1.0, device=weights.device)  # [4096]
             comp_rgb_refraction = torch.sum(weights * rgb, dim=-2)  # [4096, 3]
             comp_rgb_reflection = torch.sum(weights_ref * rgb_ref, dim=-2)  # [4096, 3]
