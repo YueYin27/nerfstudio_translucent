@@ -3,7 +3,7 @@ import trimesh
 import open3d as o3d
 
 # load mesh
-mesh = trimesh.load_mesh('water.ply')
+# mesh = trimesh.load_mesh('fox.ply')
 # create some rays
 # ray_origins = torch.tensor([[0.0, 0.0,  0.4]])  # [num_rays, num_samples, coordinates]
 # ray_directions = torch.tensor([[0.0,  0.0, -1.0]])  # [num_rays, num_samples, coordinates]

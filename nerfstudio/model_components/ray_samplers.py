@@ -577,14 +577,14 @@ class ProposalNetworkSampler(Sampler):
         assert density_fns is not None
 
         weights_list = []
-        weights_list_ref = []
         ray_samples_list = []
-        ray_samples_list_ref = []
+        # weights_list_ref = []
+        # ray_samples_list_ref = []
 
         n = self.num_proposal_network_iterations
         weights = None
         ray_samples = None
-        ray_samples_ref = None
+        # ray_samples_ref = None
         updated = self._steps_since_update > self.update_sched(self._step) or self._step < 10
         for i_level in range(n + 1):
             is_prop = i_level < n
@@ -592,41 +592,42 @@ class ProposalNetworkSampler(Sampler):
             if i_level == 0:
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
-                ray_samples_ref = self.initial_sampler(ray_bundle, num_samples=num_samples)
-                intersections, normals, mask = ray_samples.get_refracted_rays()  # use it for refraction
-                ray_samples_ref.get_reflected_rays(intersections, normals, mask)
+                # ray_samples_ref = self.initial_sampler(ray_bundle, num_samples=num_samples)
+                # use the following for refraction
+                ray_samples.get_refracted_rays()
+                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
             else:
                 # PDF sampling based on the last samples and their weights
                 # Perform annealing to the weights. This will be a no-op if self._anneal is 1.0.
                 assert weights is not None
                 annealed_weights = torch.pow(weights, self._anneal)
-
                 ray_samples = self.pdf_sampler(ray_bundle, ray_samples, annealed_weights, num_samples=num_samples)
-                ray_samples_ref = self.pdf_sampler(ray_bundle, ray_samples_ref, annealed_weights, num_samples=num_samples)
-                intersections, normals, mask = ray_samples.get_refracted_rays()  # use it for refraction
-                ray_samples_ref.get_reflected_rays(intersections, normals, mask)
+                # ray_samples_ref = self.pdf_sampler(ray_bundle, ray_samples_ref, annealed_weights, num_samples=num_samples)
+                # use the following for refraction
+                ray_samples.get_refracted_rays()
+                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
 
             if is_prop:
                 if updated:
                     # always update on the first step or the inf check in grad scaling crashes
                     density = density_fns[i_level](ray_samples.frustums.get_positions())
-                    density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
+                    # density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
                 else:
                     with torch.no_grad():
                         density = density_fns[i_level](ray_samples.frustums.get_positions())
-                        density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
+                        # density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
                 weights = ray_samples.get_weights(density)
-                weights_ref = ray_samples_ref.get_weights(density_ref)
                 weights_list.append(weights)  # (num_rays, num_samples)
-                weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
                 ray_samples_list.append(ray_samples)
-                ray_samples_list_ref.append(ray_samples_ref)
+                # weights_ref = ray_samples_ref.get_weights(density_ref)
+                # weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
+                # ray_samples_list_ref.append(ray_samples_ref)
         if updated:
             self._steps_since_update = 0
 
         assert ray_samples is not None
-        assert ray_samples_ref is not None
-        return ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref
+        # assert ray_samples_ref is not None
+        return ray_samples, weights_list, ray_samples_list
 
 
 class NeuSSampler(Sampler):

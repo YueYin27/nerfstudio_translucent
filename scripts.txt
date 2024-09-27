@@ -4,9 +4,11 @@ conda activate nerfstudio
 
 ssh -L7535:127.0.0.1:22 DUG_ANU
 scp -r filename DUG_ANU:/data/anu_nerftlo/nerfstudio/data/customized/
-scp -rp filename u7535192@cluster1.cecs.anu.edu.au:/home/projects/u7535192/projects/
+scp -rp filename u7535192@cluster1.cecs.anu.edu.au:/home/projects/transdataset/
 
+cd /home/projects/u7535192/projects/nerfstudio_translucent
 srun -p teaching --gres=gpu:1 -t 24:00:00 --constraint="nvidia535" --pty bash
+srun -p gpu --account optimalvision --gres=gpu:1 -t 24:00:00 --pty bash
 singularity shell --nv /opt/apps/containers/conda/conda-nvidia-22.04-latest.sif
 source /home/projects/u7535192/anaconda3/etc/profile.d/conda.sh
 

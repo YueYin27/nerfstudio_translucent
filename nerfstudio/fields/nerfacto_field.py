@@ -267,6 +267,7 @@ class NerfactoField(Field):
         directions = shift_directions_for_tcnn(ray_samples.frustums.directions)
         directions_flat = directions.view(-1, 3)
         d = self.direction_encoding(directions_flat)
+        # d = torch.zeros_like(d)
 
         outputs_shape = ray_samples.frustums.directions.shape[:-1]
 

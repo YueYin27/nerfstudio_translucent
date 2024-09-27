@@ -210,13 +210,18 @@ class RGBRenderer(nn.Module):
             rgb = torch.nan_to_num(rgb)
             if rgb_ref is not None:
                 rgb_ref = torch.nan_to_num(rgb_ref)
-        # rgb = self.combine_rgb(
-        #     rgb, weights, background_color=self.background_color, ray_indices=ray_indices, num_rays=num_rays
-        # )
-        rgb = self.combine_rgb_ref(
-            rgb, weights, background_color=self.background_color, ray_indices=ray_indices, num_rays=num_rays,
-            ray_samples=ray_samples, rgb_ref=rgb_ref, weights_ref=weights_ref,
+
+        # to run original nerfacto
+        rgb = self.combine_rgb(
+            rgb, weights, background_color=self.background_color, ray_indices=ray_indices, num_rays=num_rays
         )
+
+        # to enable reflection and refraction
+        # rgb = self.combine_rgb_ref(
+        #     rgb, weights, background_color=self.background_color, ray_indices=ray_indices, num_rays=num_rays,
+        #     ray_samples=ray_samples, rgb_ref=rgb_ref, weights_ref=weights_ref,
+        # )
+
         if not self.training:
             torch.clamp_(rgb, min=0.0, max=1.0)
         return rgb
