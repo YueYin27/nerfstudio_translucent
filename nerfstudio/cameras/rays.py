@@ -32,8 +32,9 @@ from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
 # mesh = trimesh.load_mesh('/home/projects/u7535192/projects/nerfstudio_translucent/nerfstudio/cameras/ball.ply')
-# mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cylinder.ply')
-mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/teapot.ply')
+# mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cube.ply')
+mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
+# mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/teapot.ply')
 
 @dataclass
 class Frustums(TensorDataclass):
@@ -285,6 +286,8 @@ class RaySamples(TensorDataclass):
         directions = self.frustums.directions.clone()  # [4096, 256, 3]
         positions = self.frustums.get_positions()  # [4096, 256, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
         r1, r2 = 1.0 / 1.5, 1.5 / 1.0
+        # create a tensor r of shape [4096] with all elements equal to 1/0 / 1.5
+        r = torch.ones(origins.shape[0], device=origins.device) * r1  # [4096]
         scale_factor = 0.1
         epsilon = 1e-4
         num_samples_per_ray = self.frustums.origins.shape[1]
@@ -305,53 +308,50 @@ class RaySamples(TensorDataclass):
         indices = torch.arange(origins.shape[0], device=origins.device)  # a tensor of indices from 0 to 4095
         
         # 2. Get intersections and normals through the first refraction
-        ray_refraction = MeshRefraction(origins, directions, positions, r1)
+        ray_refraction = MeshRefraction(origins, directions, positions, r)
         intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, origins, directions, indices)  # [4096, 256, 3]
-        directions_new, tir_flag = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
+        directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256]
         origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
         updated_origins, updated_directions, updated_positions, mask_update = ray_refraction.update_sample_points(
             intersections, origins_new, directions_new, mask)  # [4096, 256, 3], [4096, 256, 3], [4096, 256, 3], [4096, 256]
+
         intersections_list.append(intersections)
         mask_list.append(mask)
         updated_origins_list.append(updated_origins)
         updated_directions_list.append(updated_directions)
         indices_list.append(indices)
-        
+        normals_first = normals.clone()
+
+        # r = torch.where(tir_mask, r1, r2)
+        r = r[mask[:, 0]]
+        r = 1.0 / r
+        in_out_mask = torch.ones_like(r, dtype=torch.bool, device=origins.device)  # all elements are True, True means 'in'
+
         # 3. Get intersections and normals through the following refractions
         i = 0
-        t = 0
         while True:
-            if t % 2 == 0:
-                ray_refraction = MeshRefraction(updated_origins[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                updated_directions[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                updated_positions[mask_list[i]].view(-1, num_samples_per_ray, 3), r2)
-                intersections_offset = intersections_list[i] + directions_new * epsilon
-                intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene,
-                                                                                            intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                                                            directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                                                                     indices_list[i])
-                directions_new, tir_flag = ray_refraction.snell_fn(-normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
-                distance = distance[mask_list[i]] + torch.norm(intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)
-                origins_new = intersections - directions_new * distance.view(-1, num_samples_per_ray).unsqueeze(-1)
-                distance = distance.reshape(-1, num_samples_per_ray)
-                updated_origins, updated_directions, updated_positions, mask_update = ray_refraction.update_sample_points(
-                    intersections, origins_new, directions_new, mask)
-            else:
-                ray_refraction = MeshRefraction(updated_origins[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                updated_directions[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                updated_positions[mask_list[i]].view(-1, num_samples_per_ray, 3), r1)
-                intersections_offset = intersections_list[i] + directions_new * epsilon
-                intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene,
-                                                                                            intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                                                            directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3),
-                                                                                                     indices_list[i])
-                directions_new, tir_flag = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # positive normals because the ray is outside the surface
-                distance = distance[mask_list[i]] + torch.norm(intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)
-                origins_new = intersections - directions_new * distance.view(-1, num_samples_per_ray).unsqueeze(-1)
-                distance = distance.reshape(-1, num_samples_per_ray)
-                updated_origins, updated_directions, updated_positions, mask_update = ray_refraction.update_sample_points(
-                    intersections, origins_new, directions_new, mask)
+            ray_refraction = MeshRefraction(updated_origins[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                            updated_directions[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                            updated_positions[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                            r)
+            intersections_offset = intersections_list[i] + directions_new * epsilon
+            intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene,
+                                                                                        intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                                                                        directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                                                                                 indices_list[i])
+            normals = torch.where(in_out_mask[:, None, None], -normals, normals)
+            directions_new, tir_mask = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
+            distance = distance[mask_list[i]] + torch.norm(intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)
+            origins_new = intersections - directions_new * distance.view(-1, num_samples_per_ray).unsqueeze(-1)
+            distance = distance.reshape(-1, num_samples_per_ray)
+            updated_origins, updated_directions, updated_positions, _ = ray_refraction.update_sample_points(
+                intersections, origins_new, directions_new, mask)
+
+            r = torch.where(tir_mask, r, 1.0 / r)
+            r = r[mask[:, 0]]
+            in_out_mask = torch.where(tir_mask, in_out_mask, ~in_out_mask)
+            in_out_mask = in_out_mask[mask[:, 0]]
 
             intersections_list.append(intersections)
             mask_list.append(mask)
@@ -359,12 +359,8 @@ class RaySamples(TensorDataclass):
             updated_directions_list.append(updated_directions)
             indices_list.append(indices)
 
-            if tir_flag:
-                t += 2
-            else:
-                t += 1
             i += 1
-            print(f'Iteration {i} completed')
+            # print(f'Iteration {i} completed')
 
             # Calculate the number of non-NaN elements in the intersections tensor
             rows_with_non_nan = ~torch.isnan(intersections).any(dim=2)  # [4096, 256]
@@ -379,37 +375,42 @@ class RaySamples(TensorDataclass):
         directions_final = directions.clone()
 
         for j in range(i-1):
-            # print(f'j: {j}')
-            # print(f'updated_origins_list[j+1]: {updated_origins_list[j+1].shape}')
-            # print(f'mask_list[j]: {indices_list[j].shape}')
-            # print(f'origins_final[mask_list[j]]: {origins_final[indices_list[j]].shape}')
             origins_final[indices_list[j]] = updated_origins_list[j+1]
             directions_final[indices_list[j]] = updated_directions_list[j+1]
 
         self.frustums.origins = origins_final
         self.frustums.directions = directions_final
 
+        return intersections_list[0], normals_first, mask_update
+
     def get_reflected_rays(self, intersections, normals, masks) -> None:
-        origins = self.frustums.origins
-        directions = self.frustums.directions
-        positions = self.frustums.get_positions()
-        intersections, normals, mask = intersections[0].clone(), normals[0].clone(), masks[0].clone()  # ???
+        origins = self.frustums.origins.clone()
+        directions = self.frustums.directions.clone()
+        positions = self.frustums.get_positions().clone()
+        intersections, normals, mask = intersections.clone(), normals.clone(), masks.clone()
+        r1 = 1.0 / 1.5
+        
         # 1) Get reflective directions
         ray_reflection = RayReflection(origins, directions, positions)
-        directions_1 = ray_reflection.get_reflected_directions(normals)
-        ray_reflection.update_sample_points(intersections, directions_1, mask)
-
+        directions_new = ray_reflection.get_reflected_directions(normals)
+        distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256]
+        origins_new = intersections - directions_new * distance.unsqueeze(-1)
+        updated_origins, updated_directions, updated_positions = ray_reflection.update_sample_points(intersections,
+                                                                                                     origins_new,
+                                                                                                     directions_new,
+                                                                                                     mask)
         # 2) Update ray_samples.frustums.directions
-        directions_reflection_new = directions.clone()
-        directions_reflection_new[mask] = directions_1[mask]
+        directions_final = directions.clone()
+        directions_final[mask] = updated_directions[mask]
+        self.frustums.directions = directions_final
 
         # 3) Update ray_samples.frustums.origins
-        origins_reflection_new = origins.clone()
-        origins_reflection_1 = intersections - directions_1 * torch.norm(origins - intersections, dim=-1).unsqueeze(2)
-        origins_reflection_new[mask] = origins_reflection_1[mask]
+        origins_final = origins.clone()
+        origins_final[mask] = updated_origins[mask]
+        self.frustums.origins = origins_final
 
-        self.frustums.intersections = [intersections]
-        self.frustums.normals = [normals]
+        self.frustums.intersections = intersections
+        self.frustums.normals = normals
         self.frustums.mask = mask
 
     def get_straight_rays(self) -> None:

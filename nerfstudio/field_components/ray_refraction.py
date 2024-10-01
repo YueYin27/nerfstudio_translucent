@@ -460,15 +460,20 @@ class MeshRefraction(RayRefraction):
             refracted directions or reflected directions in case of total internal reflection
         """
 
-        r = self.r
+        r = self.r  # a tensor of shape [4096]
         l = l / torch.norm(l, p=2, dim=-1, keepdim=True)  # Normalize ray directions [4096, 256, 3]
-        c = -torch.einsum('ijk, ijk -> ij', n, l)  # Cosine of the angle between the surface normal and ray direction, [4096, 256]
-        sqrt_term = 1 - (r ** 2) * (1 - c ** 2)
-        total_internal_reflection_mask = sqrt_term <= 0  # Check for total internal reflection (sqrt_term <= 0)
-        flag = total_internal_reflection_mask.any()  # the flag is a boolean value
+        c = -torch.einsum('ijk, ijk -> ij', n, l)  # Cosine between normals and directions [4096, 256]
 
-        # Refracted directions for non-total-reflection cases
-        refracted_directions = r * l + (r * c - torch.sqrt(torch.clamp(sqrt_term, min=0))).unsqueeze(-1) * n
+        # Adjust r's shape for broadcasting
+        sqrt_term = 1 - (r[:, None] ** 2) * (1 - c ** 2)  # [4096, 256]
+        total_internal_reflection_mask = sqrt_term <= 0  # [4096, 256]
+
+        # create a [4096] mask to check if there is any total internal reflection along each ray
+        tir_mask = total_internal_reflection_mask.any(dim=-1)  # [4096]
+
+        # Refracted directions for non-total-internal-reflection cases
+        refracted_directions = r[:, None, None] * l + (r[:, None] * c - torch.sqrt(torch.clamp(sqrt_term, min=0))
+                                                      )[:, :, None] * n  # [4096, 256, 3]
         refracted_directions = torch.nn.functional.normalize(refracted_directions, dim=-1)
 
         # Total internal reflection case
@@ -479,4 +484,4 @@ class MeshRefraction(RayRefraction):
         result_directions = torch.where(total_internal_reflection_mask.unsqueeze(-1), reflected_directions,
                                         refracted_directions)
 
-        return result_directions, flag
+        return result_directions, tir_mask

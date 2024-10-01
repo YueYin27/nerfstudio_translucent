@@ -31,6 +31,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.field_components.field_heads import FieldHeadNames
+from nerfstudio.field_components.ray_reflection import RayReflection
 from nerfstudio.field_components.spatial_distortions import SceneContraction
 from nerfstudio.field_components.ray_refraction import visualization, WaterBallRefraction
 from nerfstudio.fields.density_fields import HashMLPDensityField
@@ -382,23 +383,20 @@ class NerfactoModel(Model):
 
     def get_outputs(self, ray_bundle: RayBundle):
         ray_samples: RaySamples
-        # ray_samples_ref: RaySamples
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        # ray_samples_ref, weights_list_ref, ray_samples_list_ref = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples_ref: RaySamples
+        # ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
-        # field_outputs_ref = self.field.forward(ray_samples_ref, compute_normals=self.config.predict_normals)
+        field_outputs_ref = self.field.forward(ray_samples_ref, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
-            # field_outputs_ref = scale_gradients_by_distance_squared(field_outputs_ref, ray_samples_ref)
-
+            field_outputs_ref = scale_gradients_by_distance_squared(field_outputs_ref, ray_samples_ref)
         # visualization(ray_samples, 3919, 3928)
 
         # density, _ = self.field.get_density_grid()
         # draw_heatmap(density)
-
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])  # [32768, 128, 1]
-        # weights_ref = ray_samples_ref.get_weights(field_outputs_ref[FieldHeadNames.DENSITY])  # [32768, 128, 1]
-
+        weights_ref = ray_samples_ref.get_weights(field_outputs_ref[FieldHeadNames.DENSITY])  # [32768, 128, 1]
         # # search for the first density > threshold, and recompute the weights for depth maps
         # threshold = 25
         # density = (field_outputs[FieldHeadNames.DENSITY])  # [32768, 256, 1]
@@ -428,19 +426,27 @@ class NerfactoModel(Model):
         #     plot_weights_and_density(weights, field_outputs[FieldHeadNames.DENSITY],
         #                              (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2,
         #                              200, 600, [norm_dis1, norm_dis2], norm_dis3, 0.1)
-
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
-        # weights_list_ref.append(weights_ref)
-        # ray_samples_list_ref.append(ray_samples_ref)
+        weights_list_ref.append(weights_ref)
+        ray_samples_list_ref.append(ray_samples_ref)
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples)
+        rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref)
+
+        # Fresnel equation
+        normals = ray_samples_ref.frustums.normals
+        ray_reflection = RayReflection(ray_samples_ref.frustums.origins, ray_samples_ref.frustums.directions,
+                                       ray_samples_ref.frustums.get_positions(), 1.0 / 1.5)
+        R = ray_reflection.fresnel_fn(normals)[:, 0].unsqueeze(1)  # [4096]
+        comp_rgb = R * rgb_ref + (1 - R) * rgb  # [4096, 3]
+
         # depth = self.renderer_depth(weights=weights_for_depth, ray_samples=ray_samples)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)  # [32768, 1]
         accumulation = self.renderer_accumulation(weights=weights)
 
         outputs = {
-            "rgb": rgb,
+            "rgb": comp_rgb,
             "accumulation": accumulation,
             "depth": depth,
         }

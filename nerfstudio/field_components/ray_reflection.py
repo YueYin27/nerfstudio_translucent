@@ -20,7 +20,7 @@ class RayReflection:
         self.positions = positions
         self.r = r  # n1/n2
 
-    def get_reflected_directions(self, normals):
+    def get_reflected_directions(self, n):
         """Get new ray directions based on Fresnel Equations
 
         Args:
@@ -28,15 +28,13 @@ class RayReflection:
         Returns:
             directions: reflected directions (unit vector)
         """
-        l = self.directions  # [4096, 48, 3]
-        dot_products = torch.einsum('ijk,ijk->ij', l, normals)
+        l = self.directions  # [4096, 256, 3]
+        l = l / torch.norm(l, p=2, dim=-1, keepdim=True)  # Normalize ray directions [4096, 256, 3]
+        c = -torch.einsum('ijk, ijk -> ij', n, l)  # Cosine between normals and directions [4096, 256]
 
         # Calculate the reflected direction
-        # The operation is batched over the first two dimensions
-        reflected_directions = l - 2 * dot_products.unsqueeze(-1) * normals
-
-        # Normalize the reflected directions
-        reflected_directions = torch.nn.functional.normalize(reflected_directions, dim=2)
+        reflected_directions = l + 2 * c.unsqueeze(-1) * n
+        reflected_directions = torch.nn.functional.normalize(reflected_directions, dim=-1)
 
         return reflected_directions
 
@@ -80,7 +78,7 @@ class RayReflection:
 
         return R
 
-    def update_sample_points(self, intersections, directions_new, mask):
+    def update_sample_points(self, intersections, origins_new, directions_new, mask):
         """Add sample points along reflected rays
         Args:
             intersections
@@ -90,11 +88,15 @@ class RayReflection:
         Returns:
             mask
         """
-        positions = self.positions.clone()
 
-        # Move the original sample points onto the refracted ray
-        distances_to_intersection = torch.norm(positions - intersections, dim=2)
+        # Move the original sample points onto the reflected ray
+        distances_to_intersection = torch.norm(self.positions - intersections, dim=-1)
         distances_to_intersection[~mask] = float('nan')
         updated_positions = intersections + distances_to_intersection.unsqueeze(2) * directions_new
-        positions[mask] = updated_positions[mask]
-        self.positions = positions
+        self.positions[mask] = updated_positions[mask]
+        self.origins[mask] = origins_new[mask].clone()
+        self.directions[mask] = directions_new[mask].clone()
+
+        self.directions = torch.nn.functional.normalize(self.directions, p=2, dim=-1)
+
+        return self.origins, self.directions, self.positions
