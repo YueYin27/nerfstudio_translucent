@@ -32,8 +32,8 @@ from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
 # mesh = trimesh.load_mesh('/home/projects/u7535192/projects/nerfstudio_translucent/nerfstudio/cameras/ball.ply')
-# mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cube.ply')
-mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
+mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cube.ply')
+# mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
 # mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/teapot.ply')
 
 @dataclass
@@ -310,6 +310,11 @@ class RaySamples(TensorDataclass):
         # 2. Get intersections and normals through the first refraction
         ray_refraction = MeshRefraction(origins, directions, positions, r)
         intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, origins, directions, indices)  # [4096, 256, 3]
+
+        normals_first = normals.clone()
+        ray_reflection = RayReflection(origins, directions, positions)
+        directions_reflection = ray_reflection.get_reflected_directions(normals)
+        
         directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256]
         origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
@@ -321,7 +326,6 @@ class RaySamples(TensorDataclass):
         updated_origins_list.append(updated_origins)
         updated_directions_list.append(updated_directions)
         indices_list.append(indices)
-        normals_first = normals.clone()
 
         # r = torch.where(tir_mask, r1, r2)
         r = r[mask[:, 0]]
@@ -381,7 +385,7 @@ class RaySamples(TensorDataclass):
         self.frustums.origins = origins_final
         self.frustums.directions = directions_final
 
-        return intersections_list[0], normals_first, mask_update
+        return intersections_list[0], normals_first, directions_reflection
 
     def get_reflected_rays(self, intersections, normals, masks) -> None:
         origins = self.frustums.origins.clone()
@@ -605,3 +609,16 @@ class RayBundle(TensorDataclass):
         # ray_samples.get_refracted_rays()
 
         return ray_samples
+    
+    def clone(self) -> "RayBundle":
+        """Clones the RayBundle"""
+        return RayBundle(
+            origins=self.origins.clone(),
+            directions=self.directions.clone(),
+            pixel_area=self.pixel_area.clone(),
+            camera_indices=None if self.camera_indices is None else self.camera_indices.clone(),
+            nears=None if self.nears is None else self.nears.clone(),
+            fars=None if self.fars is None else self.fars.clone(),
+            metadata={k: v.clone() for k, v in self.metadata.items()},
+            times=None if self.times is None else self.times.clone(),
+        )

@@ -125,7 +125,7 @@ class SpacedSampler(Sampler):
             spacing_ends=bins[..., 1:, None],  # normalized ending positions
             spacing_to_euclidean_fn=spacing_to_euclidean_fn,
         )
-        # ray_samples.get_refracted_rays()
+        
         return ray_samples
 
 
@@ -584,7 +584,7 @@ class ProposalNetworkSampler(Sampler):
         n = self.num_proposal_network_iterations
         weights = None
         ray_samples = None
-        # ray_samples_ref = None
+        ray_samples_ref = None
         updated = self._steps_since_update > self.update_sched(self._step) or self._step < 10
         for i_level in range(n + 1):
             is_prop = i_level < n
@@ -592,20 +592,36 @@ class ProposalNetworkSampler(Sampler):
             if i_level == 0:
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
-                ray_samples_ref = self.initial_sampler(ray_bundle, num_samples=num_samples)
                 # use the following for refraction
-                intersections, normals, masks = ray_samples.get_refracted_rays()
-                ray_samples_ref.get_reflected_rays(intersections, normals, masks)
+                intersections, normals, directions = ray_samples.get_refracted_rays()
+
+                ray_bundle_ref = ray_bundle.clone()
+                directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
+                origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
+                non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
+                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle.origins)
+                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle.directions)
+                ray_samples_ref = self.initial_sampler(ray_bundle_ref, num_samples=num_samples)
+                ray_samples_ref.frustums.normals = normals.clone()
+                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
             else:
                 # PDF sampling based on the last samples and their weights
                 # Perform annealing to the weights. This will be a no-op if self._anneal is 1.0.
                 assert weights is not None
                 annealed_weights = torch.pow(weights, self._anneal)
                 ray_samples = self.pdf_sampler(ray_bundle, ray_samples, annealed_weights, num_samples=num_samples)
-                ray_samples_ref = self.pdf_sampler(ray_bundle, ray_samples_ref, annealed_weights, num_samples=num_samples)
                 # use the following for refraction
-                intersections, normals, masks = ray_samples.get_refracted_rays()
-                ray_samples_ref.get_reflected_rays(intersections, normals, masks)
+                intersections, normals, directions = ray_samples.get_refracted_rays()
+
+                ray_bundle_ref = ray_bundle.clone()
+                directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
+                origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
+                non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
+                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle.origins)
+                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle.directions)
+                ray_samples_ref = self.pdf_sampler(ray_bundle_ref, ray_samples_ref, annealed_weights, num_samples=num_samples)
+                ray_samples_ref.frustums.normals = normals.clone()
+                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
 
             if is_prop:
                 if updated:
@@ -626,7 +642,7 @@ class ProposalNetworkSampler(Sampler):
             self._steps_since_update = 0
 
         assert ray_samples is not None
-        # assert ray_samples_ref is not None
+        assert ray_samples_ref is not None
         return ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref
 
 

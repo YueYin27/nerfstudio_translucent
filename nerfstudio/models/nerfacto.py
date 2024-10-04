@@ -436,10 +436,11 @@ class NerfactoModel(Model):
 
         # Fresnel equation
         normals = ray_samples_ref.frustums.normals
-        ray_reflection = RayReflection(ray_samples_ref.frustums.origins, ray_samples_ref.frustums.directions,
-                                       ray_samples_ref.frustums.get_positions(), 1.0 / 1.5)
-        R = ray_reflection.fresnel_fn(normals)[:, 0].unsqueeze(1)  # [4096]
+        ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions,
+                                       ray_samples.frustums.get_positions(), 1.0 / 1.5)
+        R = ray_reflection.fresnel_fn(normals)  # [4096]
         comp_rgb = R * rgb_ref + (1 - R) * rgb  # [4096, 3]
+        # comp_rgb = rgb
 
         # depth = self.renderer_depth(weights=weights_for_depth, ray_samples=ray_samples)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)  # [32768, 1]
