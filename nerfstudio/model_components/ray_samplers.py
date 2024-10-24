@@ -586,6 +586,12 @@ class ProposalNetworkSampler(Sampler):
         ray_samples = None
         ray_samples_ref = None
         updated = self._steps_since_update > self.update_sched(self._step) or self._step < 10
+
+        # get far plane according to the first proposal network iteration
+        ray_bundle_ref = ray_bundle.clone()
+        ray_samples = self.initial_sampler(ray_bundle, num_samples=self.num_nerf_samples_per_ray)
+        ray_samples.update_far_plane(ray_bundle, ray_bundle_ref)
+
         for i_level in range(n + 1):
             is_prop = i_level < n
             num_samples = self.num_proposal_samples_per_ray[i_level] if is_prop else self.num_nerf_samples_per_ray
@@ -595,12 +601,11 @@ class ProposalNetworkSampler(Sampler):
                 # use the following for refraction
                 intersections, normals, directions = ray_samples.get_refracted_rays()
 
-                ray_bundle_ref = ray_bundle.clone()
                 directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
                 origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
                 non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
-                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle.origins)
-                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle.directions)
+                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
+                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
                 ray_samples_ref = self.initial_sampler(ray_bundle_ref, num_samples=num_samples)
                 ray_samples_ref.frustums.normals = normals.clone()
                 # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
@@ -613,12 +618,12 @@ class ProposalNetworkSampler(Sampler):
                 # use the following for refraction
                 intersections, normals, directions = ray_samples.get_refracted_rays()
 
-                ray_bundle_ref = ray_bundle.clone()
+                # ray_bundle_ref = ray_bundle.clone()
                 directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
                 origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
                 non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
-                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle.origins)
-                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle.directions)
+                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
+                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
                 ray_samples_ref = self.pdf_sampler(ray_bundle_ref, ray_samples_ref, annealed_weights, num_samples=num_samples)
                 ray_samples_ref.frustums.normals = normals.clone()
                 # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
@@ -633,11 +638,13 @@ class ProposalNetworkSampler(Sampler):
                         density = density_fns[i_level](ray_samples.frustums.get_positions())
                         density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
                 weights = ray_samples.get_weights(density)
-                weights_list.append(weights)  # (num_rays, num_samples)
-                ray_samples_list.append(ray_samples)
+                # weights_list.append(weights)  # (num_rays, num_samples)
+                # ray_samples_list.append(ray_samples)
                 weights_ref = ray_samples_ref.get_weights(density_ref)
-                weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
-                ray_samples_list_ref.append(ray_samples_ref)
+                # weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
+                # ray_samples_list_ref.append(ray_samples_ref)
+                weights_list.append(torch.cat([weights, weights_ref], dim=1))
+                ray_samples_list.append(ray_samples.concat_samples(ray_samples_ref))
         if updated:
             self._steps_since_update = 0
 

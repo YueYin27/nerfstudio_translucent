@@ -15,6 +15,7 @@
 """
 Some ray datastructures.
 """
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Literal, Optional, Tuple, Union, overload, List, Any
@@ -113,6 +114,32 @@ class Frustums(TensorDataclass):
             starts=torch.ones((1, 1)).to(device),
             ends=torch.ones((1, 1)).to(device),
             pixel_area=torch.ones((1, 1)).to(device),
+        )
+
+    def concat_frustums(self, frustums) -> "Frustums":
+        self.origins = torch.cat([self.origins, frustums.origins], dim=1)
+        self.directions = torch.cat([self.directions, frustums.directions], dim=1)
+        self.starts = torch.cat([self.starts, frustums.starts], dim=1)
+        self.ends = torch.cat([self.ends, frustums.ends], dim=1)
+        self.pixel_area = torch.cat([self.pixel_area, frustums.pixel_area], dim=1)
+        if self.offsets is not None:
+            self.offsets = torch.cat([self.offsets, frustums.offsets], dim=1)
+        if self.intersections is not None:
+            self.intersections = torch.cat([self.intersections, frustums.intersections], dim=1)
+        if self.normals is not None:
+            self.normals = torch.cat([self.normals, frustums.normals], dim=1)
+        if self.mask is not None:
+            self.mask = torch.cat([self.mask, frustums.mask], dim=1)
+        return Frustums(
+            origins=self.origins,
+            directions=self.directions,
+            starts=self.starts,
+            ends=self.ends,
+            pixel_area=self.pixel_area,
+            offsets=self.offsets,
+            intersections=self.intersections,
+            normals=self.normals,
+            mask=self.mask,
         )
 
 
@@ -280,6 +307,151 @@ class RaySamples(TensorDataclass):
         self.frustums.directions = directions_new
         self.frustums.origins = origins_new
 
+    def solve_quadratic_equation(self, origin, direction, radius):
+        # Compute the coefficients a, b, c for the quadratic equation
+        a = torch.sum(direction ** 2, dim=-1)  # a = dx^2 + dy^2 + dz^2
+        b = 2 * torch.sum(origin * direction, dim=-1)  # b = 2 * (x0*dx + y0*dy + z0*dz)
+        c = torch.sum(origin ** 2, dim=-1) - radius ** 2  # c = x0^2 + y0^2 + z0^2 - r^2
+        discriminant = b ** 2 - 4 * a * c  # Compute the discriminant
+
+        # Check for valid intersections (discriminant >= 0)
+        valid_mask = discriminant >= 0
+
+        # Calculate the two possible t values
+        sqrt_discriminant = torch.sqrt(discriminant.clamp(min=0))  # Clamp to avoid NaN for negative values
+        t1 = (-b - sqrt_discriminant) / (2 * a)
+        t2 = (-b + sqrt_discriminant) / (2 * a)
+
+        t_positive = torch.where(t1 > 0, t1, t2)
+        return torch.where((t_positive > 0) & valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
+
+    def update_far_plane(self, ray_bundle, ray_bundle_ref):
+        """Update the far plane of the frustums.
+
+        Args:
+            ray_bundle: RayBundle object.
+            ray_bundle_ref: RayBundle object.
+        """
+
+        # 1. Get origins, directions, r1, r2
+        origins = self.frustums.origins.clone()  # [4096, 256, 3]
+        directions = self.frustums.directions.clone()  # [4096, 256, 3]
+        positions = self.frustums.get_positions()  # [4096, 256, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+        r1, r2 = 1.0 / 1.5, 1.5 / 1.0
+        # create a tensor r of shape [4096] with all elements equal to 1/0 / 1.5
+        r = torch.ones(origins.shape[0], device=origins.device) * r1  # [4096]
+        scale_factor = 0.1
+        epsilon = 1e-4
+        num_samples_per_ray = self.frustums.origins.shape[1]
+        radius = torch.tensor(4.2 * math.sqrt(3) * 0.1, device=origins.device)
+
+        # Convert trimesh vertices and faces to tensors and create a RaycastingScene
+        vertices_tensor = o3d.core.Tensor(mesh.vertices * scale_factor,
+                                          dtype=o3d.core.Dtype.Float32)  # Scale mesh.vertices!
+        triangles_tensor = o3d.core.Tensor(mesh.faces, dtype=o3d.core.Dtype.UInt32)  # Convert to UInt32
+        scene = o3d.t.geometry.RaycastingScene()  # Create a RaycastingScene
+        scene.add_triangles(vertices_tensor, triangles_tensor)  # add the triangles
+
+        # Create some lists
+        intersections_list = []
+        mask_list = []
+        updated_origins_list = []
+        updated_directions_list = []
+        indices_list = []
+        t_acc_list = []
+        indices = torch.arange(origins.shape[0], device=origins.device)  # a tensor of indices from 0 to 4095
+
+        # 2. Get intersections and normals through the first refraction
+        ray_refraction = MeshRefraction(origins, directions, positions, r)
+        intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, origins, directions, indices)  # [4096, 256, 3]
+
+        ray_reflection = RayReflection(origins, directions, positions)
+        directions_reflection = ray_reflection.get_reflected_directions(normals)
+        directions_reflection = directions_reflection[indices][:, 0]  # [4096, 3]
+        far_new = self.solve_quadratic_equation(intersections.clone()[indices][:, 0] + directions_reflection * epsilon,
+                                                directions_reflection, radius)
+        ray_bundle_ref.fars[indices] = far_new.unsqueeze(-1)
+
+        directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
+        distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256], distance from the origin to the first intersection
+        origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
+        updated_origins, updated_directions, updated_positions, mask_update = ray_refraction.update_sample_points(
+            intersections, origins_new, directions_new, mask)  # [4096, 256, 3], [4096, 256, 3], [4096, 256, 3], [4096, 256]
+        t_acc = torch.where(mask[:, 0], distance[:, 0], 1.2)
+        t_acc_list.append(t_acc)  # add the masked t_acc to the list
+
+        intersections_list.append(intersections)
+        mask_list.append(mask)
+        updated_origins_list.append(updated_origins)
+        updated_directions_list.append(updated_directions)
+        indices_list.append(indices)
+
+        # r = torch.where(tir_mask, r1, r2)
+        r = r[mask[:, 0]]
+        r = 1.0 / r
+        in_out_mask = torch.ones_like(r, dtype=torch.bool,
+                                      device=origins.device)  # all elements are True, True means 'in'
+
+        # 3. Get intersections and normals through the following refractions
+        i = 0
+        while True:
+            ray_refraction = MeshRefraction(updated_origins[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                            updated_directions[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                            updated_positions[mask_list[i]].view(-1, num_samples_per_ray, 3), r)
+            intersections_offset = intersections_list[i] + directions_new * epsilon
+            intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
+                                                                                                 directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3), indices_list[i])
+            normals = torch.where(in_out_mask[:, None, None], -normals, normals)
+            directions_prev = directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3).clone()
+            directions_prev = directions_prev[:, 0]  # [num_of_rays, 3]
+            directions_new, tir_mask = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
+            distance_prev = distance[mask_list[i]].reshape(-1, num_samples_per_ray)[:, 0]  # store the previous distance
+            distance = distance[mask_list[i]] + torch.norm(
+                intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)  # [num_of_rays, 256], the accumulated distance from the origin
+            origins_new = intersections - directions_new * distance.view(-1, num_samples_per_ray).unsqueeze(-1)
+            distance = distance.reshape(-1, num_samples_per_ray)  # [num_of_rays, 256]
+            updated_origins, updated_directions, updated_positions, _ = ray_refraction.update_sample_points(
+                intersections, origins_new, directions_new, mask)
+
+            # intersections_last = x.unsqueeze(-1) * directions_prev[:, 0]  # [num_of_rays, 256, 3], the intersection point on the far plane
+            intersections_prev = intersections_list[i][mask_list[i]]
+            intersections_prev = intersections_prev.view(-1, num_samples_per_ray, 3)  # [num_of_rays, 256, 3]
+            intersections_prev = intersections_prev[:, 0]  # [num_of_rays, 3]
+
+            distance_last = self.solve_quadratic_equation(intersections_prev, directions_prev, radius)  # [num_of_rays], the distance from the intersection point to the far plane
+            distance_last = torch.where(mask[:, 0], torch.tensor(0.0, device=origins.device), distance_last)
+            # print('distance_last:', distance_last[:37])
+            t_acc = torch.where(mask[:, 0], distance[:, 0], distance_prev + distance_last + 1e-4)  # if mask is True, keep the accumulated distance, otherwise, add the distance to the far plane
+            # print('t_acc:', t_acc[:37])
+            t_acc_list.append(t_acc)  # add the masked t_acc to the list
+
+            r = torch.where(tir_mask, r, 1.0 / r)
+            r = r[mask[:, 0]]
+            in_out_mask = torch.where(tir_mask, in_out_mask, ~in_out_mask)
+            in_out_mask = in_out_mask[mask[:, 0]]
+
+            intersections_list.append(intersections)
+            mask_list.append(mask)
+            updated_origins_list.append(updated_origins)
+            updated_directions_list.append(updated_directions)
+            indices_list.append(indices)
+
+            i += 1
+
+            # Calculate the number of non-NaN elements in the intersections tensor
+            rows_with_non_nan = ~torch.isnan(intersections).any(dim=2)  # [num_of_rays, 256]
+            rows_with_non_nan = rows_with_non_nan.any(dim=1)  # [num_of_rays]
+            num_non_nan_rows = rows_with_non_nan.sum().item()
+
+            # Break the loop if no more intersections are found
+            if num_non_nan_rows == 0 or i > 10:
+                break
+
+        # ray_bundle.fars = t_acc.unsqueeze(1)
+        for j in range(i):
+            ray_bundle.fars[indices_list[j]] = t_acc_list[j+1].unsqueeze(-1)
+        # print('ray_bundle.fars:', ray_bundle.fars[36])
+
     def get_refracted_rays(self):
         # 1. Get origins, directions, r1, r2
         origins = self.frustums.origins.clone()  # [4096, 256, 3]
@@ -298,7 +470,7 @@ class RaySamples(TensorDataclass):
         triangles_tensor = o3d.core.Tensor(mesh.faces, dtype=o3d.core.Dtype.UInt32)  # Convert to UInt32
         scene = o3d.t.geometry.RaycastingScene()  # Create a RaycastingScene
         scene.add_triangles(vertices_tensor, triangles_tensor)  # add the triangles
-        
+
         # Create some lists
         intersections_list = []
         mask_list = []
@@ -306,7 +478,7 @@ class RaySamples(TensorDataclass):
         updated_directions_list = []
         indices_list = []
         indices = torch.arange(origins.shape[0], device=origins.device)  # a tensor of indices from 0 to 4095
-        
+
         # 2. Get intersections and normals through the first refraction
         ray_refraction = MeshRefraction(origins, directions, positions, r)
         intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, origins, directions, indices)  # [4096, 256, 3]
@@ -314,7 +486,7 @@ class RaySamples(TensorDataclass):
         normals_first = normals.clone()
         ray_reflection = RayReflection(origins, directions, positions)
         directions_reflection = ray_reflection.get_reflected_directions(normals)
-        
+
         directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256]
         origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
@@ -393,7 +565,7 @@ class RaySamples(TensorDataclass):
         positions = self.frustums.get_positions().clone()
         intersections, normals, mask = intersections.clone(), normals.clone(), masks.clone()
         r1 = 1.0 / 1.5
-        
+
         # 1) Get reflective directions
         ray_reflection = RayReflection(origins, directions, positions)
         directions_new = ray_reflection.get_reflected_directions(normals)
@@ -501,6 +673,37 @@ class RaySamples(TensorDataclass):
             return weights
         return weights, transmittance
 
+    def concat_samples(self, ray_samples) -> "RaySamples":
+        """Concatenates ray samples to the current ray bundle.
+
+        Args:
+            ray_samples: RaySamples object.
+        """
+        self.frustums = self.frustums.concat_frustums(ray_samples.frustums)
+        if self.camera_indices is not None:
+            self.camera_indices = torch.cat([self.camera_indices, ray_samples.camera_indices], dim=1)
+        if self.deltas is not None:
+            self.deltas = torch.cat([self.deltas, ray_samples.deltas], dim=1)
+        if self.spacing_starts is not None:
+            self.spacing_starts = torch.cat([self.spacing_starts, ray_samples.spacing_starts], dim=1)
+        if self.spacing_ends is not None:
+            self.spacing_ends = torch.cat([self.spacing_ends, ray_samples.spacing_ends], dim=1)
+        if self.metadata is not None:
+            for key in self.metadata:
+                self.metadata[key] = torch.cat([self.metadata[key], ray_samples.metadata[key]], dim=1)
+        if self.times is not None:
+            self.times = torch.cat([self.times, ray_samples.times], dim=1)
+        return RaySamples(
+            frustums=self.frustums,
+            camera_indices=self.camera_indices,
+            deltas=self.deltas,
+            spacing_starts=self.spacing_starts,
+            spacing_ends=self.spacing_ends,
+            metadata=self.metadata,
+            times=self.times,
+        )
+
+
 
 @dataclass
 class RayBundle(TensorDataclass):
@@ -579,19 +782,68 @@ class RayBundle(TensorDataclass):
         Returns:
             Samples projected along ray.
         """
+        deltas = bin_ends - bin_starts  # [4096, num_samples, 1]
+        if self.camera_indices is not None:
+            camera_indices = self.camera_indices[..., None]
+        else:
+            camera_indices = None
+
+        shaped_raybundle_fields = self[..., None]  # add a dimension to each of the attributes of the RayBundle
+        frustums = Frustums(
+            origins=shaped_raybundle_fields.origins,  # [4096, 1, 3]
+            directions=shaped_raybundle_fields.directions,  # [4096, 1, 3]
+            starts=bin_starts,  # [4096, num_samples, 1], euclidean
+            ends=bin_ends,  # [4096, num_samples, 1], euclidean
+            pixel_area=shaped_raybundle_fields.pixel_area,  # [..., 1, 1]
+        )
+
+        ray_samples = RaySamples(
+            frustums=frustums,  # the viewing volume of the camera
+            camera_indices=camera_indices,  # [..., 1, 1]
+            deltas=deltas,  # [..., num_samples, 1], step size between adjacent sample points along the rays
+            spacing_starts=spacing_starts,  # [..., num_samples, 1], normalized starting positions
+            spacing_ends=spacing_ends,  # [..., num_samples, 1], normalized ending positions
+            spacing_to_euclidean_fn=spacing_to_euclidean_fn,  # mapping to euclidean space
+            metadata=shaped_raybundle_fields.metadata,
+            times=None if self.times is None else self.times[..., None],  # [..., 1, 1]
+        )
+
+        # ray_samples.get_refracted_rays()
+
+        return ray_samples
+    
+    def get_ray_samples_ref(
+            self,
+            bin_starts: Float[Tensor, "*bs num_samples 1"],
+            bin_ends: Float[Tensor, "*bs num_samples 1"],
+            spacing_starts: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
+            spacing_ends: Optional[Float[Tensor, "*bs num_samples 1"]] = None,
+            spacing_to_euclidean_fn: Optional[Callable] = None,
+    ) -> RaySamples:
+        """Produces samples for each ray by projection points along the ray direction. Currently samples uniformly.
+
+        Args:
+            bin_starts: Distance from origin to start of bin.
+            bin_ends: Distance from origin to end of bin.
+
+        Returns:
+            Samples projected along ray.
+        """
         deltas = bin_ends - bin_starts
         if self.camera_indices is not None:
             camera_indices = self.camera_indices[..., None]
         else:
             camera_indices = None
 
-        shaped_raybundle_fields = self[..., None]
-
+        shaped_raybundle_fields = self[..., None]  # add a dimension to each of the attributes of the RayBundle
+        
+        # TODO: modify the
+        
         frustums = Frustums(
-            origins=shaped_raybundle_fields.origins,  # [..., 1, 3]
-            directions=shaped_raybundle_fields.directions,  # [..., 1, 3]
-            starts=bin_starts,  # [..., num_samples, 1], euclidean
-            ends=bin_ends,  # [..., num_samples, 1], euclidean
+            origins=shaped_raybundle_fields.origins,  # [4096, 1, 3]
+            directions=shaped_raybundle_fields.directions,  # [4096, 1, 3]
+            starts=bin_starts,  # [4096, num_samples, 1], euclidean
+            ends=bin_ends,  # [4096, num_samples, 1], euclidean
             pixel_area=shaped_raybundle_fields.pixel_area,  # [..., 1, 1]
         )
 

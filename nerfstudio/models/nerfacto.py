@@ -426,25 +426,29 @@ class NerfactoModel(Model):
         #     plot_weights_and_density(weights, field_outputs[FieldHeadNames.DENSITY],
         #                              (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2,
         #                              200, 600, [norm_dis1, norm_dis2], norm_dis3, 0.1)
-        weights_list.append(weights)
-        ray_samples_list.append(ray_samples)
-        weights_list_ref.append(weights_ref)
-        ray_samples_list_ref.append(ray_samples_ref)
+        weights_list.append(torch.cat((weights, weights_ref), dim=1))
+        ray_samples_list.append(ray_samples.concat_samples(ray_samples_ref))
+        # weights_list_ref.append(weights_ref)
+        # ray_samples_list_ref.append(ray_samples_ref)
 
-        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples)
-        rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref)
+        # rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples)
+        rgb = self.renderer_rgb(rgb=torch.cat((field_outputs[FieldHeadNames.RGB], field_outputs_ref[FieldHeadNames.RGB]), dim=1),
+                                weights=torch.cat((weights, weights_ref), dim=1),
+                                ray_samples=ray_samples.concat_samples(ray_samples_ref))
+        # rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref)
 
-        # Fresnel equation
-        normals = ray_samples_ref.frustums.normals
-        ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions,
-                                       ray_samples.frustums.get_positions(), 1.0 / 1.5)
-        R = ray_reflection.fresnel_fn(normals)  # [4096]
-        comp_rgb = R * rgb_ref + (1 - R) * rgb  # [4096, 3]
-        # comp_rgb = rgb
+        # # Fresnel equation
+        # normals = ray_samples_ref.frustums.normals
+        # ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions,
+        #                                ray_samples.frustums.get_positions(), 1.0 / 1.5)
+        # R = ray_reflection.fresnel_fn(normals)  # [4096]
+        # comp_rgb = R * rgb_ref + (1 - R) * rgb  # [4096, 3]
+        comp_rgb = rgb
 
         # depth = self.renderer_depth(weights=weights_for_depth, ray_samples=ray_samples)
-        depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)  # [32768, 1]
-        accumulation = self.renderer_accumulation(weights=weights)
+        depth = self.renderer_depth(weights=torch.cat((weights, weights_ref), dim=1),
+                                    ray_samples=ray_samples.concat_samples(ray_samples_ref))  # [32768, 1]
+        accumulation = self.renderer_accumulation(weights=torch.cat((weights, weights_ref), dim=1))
 
         outputs = {
             "rgb": comp_rgb,

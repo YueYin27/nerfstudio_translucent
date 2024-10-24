@@ -408,7 +408,7 @@ class MeshRefraction(RayRefraction):
         normals = torch.where(mask.unsqueeze(-1), normals, torch.tensor(float('nan'), device=device))
 
         # Create an indices tensor to store the indices of true values in mask
-        indices = torch.nonzero(torch.all(mask, dim=-1)).squeeze(dim=-1)  # [num_of_rays]
+        indices = torch.nonzero(torch.all(mask, dim=-1)).squeeze(dim=-1)  # the indices of the True values, [num_of_rays]
         indices = indices_prev[indices]  # [num_of_rays], the indices of the previous True values
 
         return intersections, normals, mask, indices
