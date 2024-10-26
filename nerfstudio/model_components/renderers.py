@@ -88,6 +88,7 @@ class RGBRenderer(nn.Module):
         Returns:
             Outputs rgb values.
         """
+        # rgb = colors.srgb_to_linear(rgb)  # Convert to linear space
         if ray_indices is not None and num_rays is not None:
             # Necessary for packed samples from volumetric ray sampler
             if background_color == "last_sample":
@@ -208,8 +209,8 @@ class RGBRenderer(nn.Module):
 
         if not self.training:
             rgb = torch.nan_to_num(rgb)
-            if rgb_ref is not None:
-                rgb_ref = torch.nan_to_num(rgb_ref)
+            if rgb is not None:
+                rgb = torch.nan_to_num(rgb)
 
         # to run original nerfacto
         rgb = self.combine_rgb(
@@ -223,7 +224,7 @@ class RGBRenderer(nn.Module):
         # )
 
         if not self.training:
-            torch.clamp_(rgb, min=0.0, max=1.0)
+            torch.clamp_(rgb, min=0.0, max=1.0)  # make sure the rgb values are in the range [0, 1]
         return rgb
 
 
