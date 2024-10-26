@@ -35,7 +35,7 @@ TORCH_DEVICE = Union[str, torch.device]
 # mesh = trimesh.load_mesh('/home/projects/u7535192/projects/nerfstudio_translucent/nerfstudio/cameras/ball.ply')
 mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cube.ply')
 # mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
-# mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/teapot.ply')
+# mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/Korken_jar.ply')
 
 @dataclass
 class Frustums(TensorDataclass):
@@ -370,7 +370,7 @@ class RaySamples(TensorDataclass):
         directions_reflection = directions_reflection[indices][:, 0]  # [4096, 3]
         far_new = self.solve_quadratic_equation(intersections.clone()[indices][:, 0] + directions_reflection * epsilon,
                                                 directions_reflection, radius)
-        ray_bundle_ref.fars[indices] = far_new.unsqueeze(-1)
+        ray_bundle_ref.fars[indices] = far_new.unsqueeze(-1) + 1e-2
 
         directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256], distance from the origin to the first intersection
