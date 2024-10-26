@@ -49,7 +49,7 @@ class RayReflection:
         r = self.r  # n1/n2
         l = self.directions  # [4096, 48, 3]
         # Calculate the cosine of the angle of incidence
-        cos_theta_i = -torch.einsum('ijk,ijk->ij', l, normals)
+        cos_theta_i = -torch.einsum('ij,ij->i', l[:, 0, :], normals[:, 0, :])
         cos_theta_i = torch.clamp(cos_theta_i, -1.0, 1.0)  # Ensure values are within valid range
 
         sin_theta_i_squared = 1 - cos_theta_i ** 2
@@ -58,9 +58,6 @@ class RayReflection:
         sin_theta_t_squared = r ** 2 * sin_theta_i_squared
         sin_theta_t_squared = torch.clamp(sin_theta_t_squared, 0.0, 1.0)  # Ensure values are within valid range
         cos_theta_t = torch.sqrt(1 - sin_theta_t_squared)
-
-        # Handle cases where sin_theta_t_squared > 1 due to numerical precision issues
-        cos_theta_t = torch.nan_to_num(cos_theta_t, nan=0.0)  # Replace NaNs with zeroes
 
         # Add small epsilon to denominators to avoid division by zero
         epsilon = 1e-6
@@ -73,9 +70,9 @@ class RayReflection:
         R = (Rs + Rp) / 2
 
         # Handle any remaining NaNs
-        R = torch.nan_to_num(R, nan=0.0)  # Replace NaNs with zeroes
+        R = torch.nan_to_num(R, nan=0.0)  # Replace NaNs with zeroes, so we don't consider reflections where there are no intersections
 
-        return R[:, 0].unsqueeze(1)
+        return R.unsqueeze(-1)
 
     def update_sample_points(self, intersections, origins_new, directions_new, mask):
         """Add sample points along reflected rays
