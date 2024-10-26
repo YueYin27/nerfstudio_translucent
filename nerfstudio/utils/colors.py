@@ -55,3 +55,20 @@ def get_color(color: Union[str, list]) -> Float[Tensor, "3"]:
         return torch.tensor(color)
 
     raise ValueError(f"Color should be an RGB list or string, instead got {type(color)}")
+
+
+def srgb_to_linear(srgb):
+    linear = torch.where(
+        srgb <= 0.04045,
+        srgb / 12.92,
+        ((srgb + 0.055) / 1.055) ** 2.4
+    )
+    return linear
+
+def linear_to_srgb(linear):
+    srgb = torch.where(
+        linear <= 0.0031308,
+        linear * 12.92,
+        1.055 * (linear ** (1 / 2.4)) - 0.055
+    )
+    return srgb
