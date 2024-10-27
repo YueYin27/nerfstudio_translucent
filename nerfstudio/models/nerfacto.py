@@ -440,8 +440,9 @@ class NerfactoModel(Model):
         ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions, ray_samples.frustums.get_positions(), 1.0 / 1.5)
         R = ray_reflection.fresnel_fn(normals)  # [4096]
         comp_rgb = R * rgb_ref + (1 - R) * rgb  # use fresnel equation to combine the two colors in linear space
-        # convert back to sRGB and make sure the output is in the range [0, 1]
-        comp_srgb = torch.clamp(colors.linear_to_srgb(comp_rgb), 0.0, 1.0)
+        comp_srgb = colors.linear_to_srgb(comp_rgb)  # convert back to sRGB
+        # make sure the output is in the range [0, 1]
+        comp_srgb = torch.clamp(comp_srgb, 0.0, 1.0)
 
         # depth = self.renderer_depth(weights=weights_for_depth, ray_samples=ray_samples)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)  # [32768, 1]
