@@ -638,11 +638,13 @@ class ProposalNetworkSampler(Sampler):
                         density = density_fns[i_level](ray_samples.frustums.get_positions())
                         density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
                 weights = ray_samples.get_weights(density)
-                weights_list.append(weights)  # (num_rays, num_samples)
-                ray_samples_list.append(ray_samples)
+                # weights_list.append(weights)  # (num_rays, num_samples)
+                # ray_samples_list.append(ray_samples)
                 weights_ref = ray_samples_ref.get_weights(density_ref)
-                weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
-                ray_samples_list_ref.append(ray_samples_ref)
+                # weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
+                # ray_samples_list_ref.append(ray_samples_ref)
+                weights_list.append(torch.cat([weights, weights_ref], dim=1))
+                ray_samples_list.append(ray_samples.concat_samples(ray_samples_ref))
         if updated:
             self._steps_since_update = 0
 
