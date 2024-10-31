@@ -20,7 +20,7 @@ The function use prefix conventions in the following way:
     - 'vis_*' functions (e.g., 'vis_camera_rays')
         return 'go.Figure' objects which are the plots. Go Figure! :')
 """
-
+import os
 from typing import Any, List, Optional, Union
 
 import numpy as np
@@ -567,3 +567,112 @@ def get_camera_frustums(cameras: Cameras):
         json_ = cameras.to_json(camera_idx=camera_idx)
         print(json_)
     raise NotImplementedError
+
+
+def visualization(ray_samples, idx_start, idx_end, file_name) -> None:
+    positions = ray_samples.frustums.get_positions()
+    cube_size_large = 0.84  # Size of the larger cube (0.42 x 0.42 x 0.42)
+    cube_size_small = 0.2   # Size of the smaller cube (0.2 x 0.2 x 0.2)
+    rotation_angle = np.radians(-295.127)  # Convert rotation angle to radians
+
+    # Rotation matrix for rotation along z-axis
+    rotation_matrix = np.array([
+        [np.cos(rotation_angle), -np.sin(rotation_angle), 0],
+        [np.sin(rotation_angle),  np.cos(rotation_angle), 0],
+        [0,                      0,                      1]
+    ])
+
+    for i in range(idx_start, idx_end):
+        p = positions[i, ...]
+        x = p[..., 0].flatten().cpu().numpy()
+        y = p[..., 1].flatten().cpu().numpy()
+        z = p[..., 2].flatten().cpu().numpy()
+
+        # Scatter and line traces for sample points along the ray
+        scatter_trace = go.Scatter3d(x=x, y=y, z=z, mode='markers', marker=dict(size=2))
+        line_trace = go.Scatter3d(x=x, y=y, z=z, mode='lines', line=dict(color='blue'))
+
+        # Origins trace
+        o = ray_samples.frustums.origins[i].cpu()
+        origins = go.Scatter3d(x=o[..., 0], y=o[..., 1], z=o[..., 2], mode='markers', marker=dict(size=5))
+
+        # Define vertices of the larger cube
+        half_size_large = cube_size_large / 2
+        vertices_large = np.array([
+            [-half_size_large, -half_size_large, -half_size_large],
+            [-half_size_large, -half_size_large,  half_size_large],
+            [-half_size_large,  half_size_large, -half_size_large],
+            [-half_size_large,  half_size_large,  half_size_large],
+            [ half_size_large, -half_size_large, -half_size_large],
+            [ half_size_large, -half_size_large,  half_size_large],
+            [ half_size_large,  half_size_large, -half_size_large],
+            [ half_size_large,  half_size_large,  half_size_large],
+        ])
+
+        # Define faces for the larger cube
+        faces_large = [
+            [vertices_large[0], vertices_large[1], vertices_large[3], vertices_large[2]],  # -X face
+            [vertices_large[4], vertices_large[5], vertices_large[7], vertices_large[6]],  # +X face
+            [vertices_large[0], vertices_large[1], vertices_large[5], vertices_large[4]],  # -Y face
+            [vertices_large[2], vertices_large[3], vertices_large[7], vertices_large[6]],  # +Y face
+            [vertices_large[0], vertices_large[2], vertices_large[6], vertices_large[4]],  # -Z face
+            [vertices_large[1], vertices_large[3], vertices_large[7], vertices_large[5]],  # +Z face
+        ]
+
+        # Create traces for each face of the large cube
+        large_cube_traces = []
+        for face in faces_large:
+            x_face = [v[0] for v in face]
+            y_face = [v[1] for v in face]
+            z_face = [v[2] for v in face]
+            large_cube_traces.append(go.Mesh3d(
+                x=x_face, y=y_face, z=z_face,
+                i=[0, 1, 2, 3], j=[1, 2, 3, 0], k=[2, 3, 0, 1],
+                color='blue', opacity=0.1, flatshading=True
+            ))
+
+        # Define vertices of the smaller cube and apply rotation
+        half_size_small = cube_size_small / 2
+        vertices_small = np.array([
+            [-half_size_small, -half_size_small, -half_size_small],
+            [-half_size_small, -half_size_small,  half_size_small],
+            [-half_size_small,  half_size_small, -half_size_small],
+            [-half_size_small,  half_size_small,  half_size_small],
+            [ half_size_small, -half_size_small, -half_size_small],
+            [ half_size_small, -half_size_small,  half_size_small],
+            [ half_size_small,  half_size_small, -half_size_small],
+            [ half_size_small,  half_size_small,  half_size_small],
+        ])
+
+        # Apply rotation to each vertex of the smaller cube
+        vertices_small_rotated = np.dot(vertices_small, rotation_matrix.T)
+
+        # Define faces for the rotated smaller cube
+        faces_small = [
+            [vertices_small_rotated[0], vertices_small_rotated[1], vertices_small_rotated[3], vertices_small_rotated[2]],  # -X face
+            [vertices_small_rotated[4], vertices_small_rotated[5], vertices_small_rotated[7], vertices_small_rotated[6]],  # +X face
+            [vertices_small_rotated[0], vertices_small_rotated[1], vertices_small_rotated[5], vertices_small_rotated[4]],  # -Y face
+            [vertices_small_rotated[2], vertices_small_rotated[3], vertices_small_rotated[7], vertices_small_rotated[6]],  # +Y face
+            [vertices_small_rotated[0], vertices_small_rotated[2], vertices_small_rotated[6], vertices_small_rotated[4]],  # -Z face
+            [vertices_small_rotated[1], vertices_small_rotated[3], vertices_small_rotated[7], vertices_small_rotated[5]],  # +Z face
+        ]
+
+        # Create traces for each face of the small cube
+        small_cube_traces = []
+        for face in faces_small:
+            x_face = [v[0] for v in face]
+            y_face = [v[1] for v in face]
+            z_face = [v[2] for v in face]
+            small_cube_traces.append(go.Mesh3d(
+                x=x_face, y=y_face, z=z_face,
+                i=[0, 1, 2, 3], j=[1, 2, 3, 0], k=[2, 3, 0, 1],
+                color='orange', opacity=0.3, flatshading=True
+            ))
+
+        # Create the figure with all traces
+        fig = go.Figure(data=[scatter_trace, line_trace, origins] + large_cube_traces + small_cube_traces)
+        fig.update_layout(scene=dict(aspectmode='data', aspectratio=dict(x=1, y=1, z=1)))
+
+        # Save as HTML file
+        full_path = os.path.join('logs', f"{file_name}_{i}.html")
+        fig.write_html(full_path)
