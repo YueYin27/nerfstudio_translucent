@@ -131,21 +131,62 @@ def lossfun_distortion(t, w):
     https://github.com/kakaobrain/NeRF-Factory/blob/f61bb8744a5cb4820a4d968fb3bfbed777550f4a/src/model/mipnerf360/helper.py#L142
     https://github.com/google-research/multinerf/blob/b02228160d3179300c7d499dca28cb9ca3677f32/internal/stepfun.py#L266
     """
-    ut = (t[..., 1:] + t[..., :-1]) / 2
-    dut = torch.abs(ut[..., :, None] - ut[..., None, :])
+    ut = (t[..., 1:] + t[..., :-1]) / 2  # midpoints between each start/end, i.e. sample points
+    dut = torch.abs(ut[..., :, None] - ut[..., None, :])  # distances between all pairs of sample points
     loss_inter = torch.sum(w * torch.sum(w[..., None, :] * dut, dim=-1), dim=-1)
 
     loss_intra = torch.sum(w ** 2 * (t[..., 1:] - t[..., :-1]), dim=-1) / 3
 
     return loss_inter + loss_intra
 
+def lossfun_distortion_ref(t, w, ray_samples):
+    """Loss function for distortion loss with refractive rays.
+    Args:
+        t: interval edges, (num_rays, num_samples + 1)
+        w: weights, (num_rays, num_samples)
+        ray_samples: RaySamples,  (num_rays, num_samples, 3)
+    Returns:
+        distortion loss
+    """
+    origins = ray_samples.frustums.origins
+    device = origins.device
+    diff = torch.any(origins[:, 1:] != origins[:, :-1], dim=2)
+
+    # Find the indices of changes
+    change_indices = torch.nonzero(diff, as_tuple=False).to(device)  # Ensure `change_indices` is on the same device
+    rows = change_indices[:, 0]
+    cols = change_indices[:, 1] + 1  # Adjust to the original 128-size dimension
+
+    start = torch.full((origins.size(0),), -1, dtype=torch.long, device=device)
+    end = torch.full((origins.size(0),), -1, dtype=torch.long, device=device)
+    start.index_put_((rows,), cols, accumulate=False)
+    end.index_put_((rows,), cols, accumulate=True)
+
+    range_tensor = torch.arange(w.shape[-1], device=start.device).unsqueeze(0).expand(w.shape[0], -1)
+    mask = (range_tensor >= start.unsqueeze(1)) & (range_tensor <= end.unsqueeze(1))
+    mask[(start == -1) & (end == -1), :] = False
+    mask = ~mask  # Invert the mask
+
+    w = torch.where(mask, w, torch.zeros_like(w))  # remain weight if mask is True, otherwise 0
+    ut = (t[..., 1:] + t[..., :-1]) / 2  # midpoints between each start/end
+    dut = torch.abs(ut[..., :, None] - ut[..., None, :])  # distances between all pairs of sample points
+    loss_inter = torch.sum(w * torch.sum(w[..., None, :] * dut, dim=-1), dim=-1)  # multiply by weights and sum over pairs
+    loss_intra = torch.sum(w ** 2 * (t[..., 1:] - t[..., :-1]), dim=-1) / 3
+
+    return loss_inter + loss_intra
 
 def lossfun_distortion_refractive(t, w, ray_samples):
+    """Loss function for distortion loss with refractive rays.
+    Args:
+        t: interval edges
+        w: weights
+        ray_samples: RaySamples
+    Returns:
+        distortion loss
     """
-    https://github.com/kakaobrain/NeRF-Factory/blob/f61bb8744a5cb4820a4d968fb3bfbed777550f4a/src/model/mipnerf360/helper.py#L142
-    https://github.com/google-research/multinerf/blob/b02228160d3179300c7d499dca28cb9ca3677f32/internal/stepfun.py#L266
-    """
-    scale_factor, s_near, s_far = 0.1, 0.05, 14.0  # replace it with the values you use
+    # get the scale factor and near/far values from config
+    scale_factor, s_near, s_far = 0.1, 0.05, 14.0
+
     ray_samples.get_refracted_rays()
     intersection_0, intersection_1 = ray_samples.frustums.intersections  # get intersections
     intersection_0 = (intersection_0 / scale_factor - s_near) / (s_far - s_near)
@@ -180,7 +221,7 @@ def distortion_loss(weights_list, ray_samples_list):
     """From mipnerf360"""
     c = ray_samples_to_sdist(ray_samples_list[-1])
     w = weights_list[-1][..., 0]
-    loss = torch.mean(lossfun_distortion(c, w))
+    loss = torch.mean(lossfun_distortion_ref(c, w, ray_samples_list[-1]))
     return loss
 
 
