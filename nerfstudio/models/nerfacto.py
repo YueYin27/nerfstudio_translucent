@@ -385,7 +385,7 @@ class NerfactoModel(Model):
         ray_samples: RaySamples
         ray_samples_ref: RaySamples
         # ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+        ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref, anneal, idx_list, intersections_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
         field_outputs_ref = self.field.forward(ray_samples_ref, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
@@ -397,6 +397,48 @@ class NerfactoModel(Model):
         # draw_heatmap(density)
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])  # [32768, 128, 1]
         weights_ref = ray_samples_ref.get_weights(field_outputs_ref[FieldHeadNames.DENSITY])  # [32768, 128, 1]
+
+        # if anneal >= 0.9:
+        #     w = weights.clone().detach()
+        #     for n in range(idx_list[0].shape[0]):
+        #         # print sample points distance along the rays
+        #         idx_original = idx_list[0][n]
+        #         # assume this ray has intersections, t is the distance to the camera origin
+        #         t = torch.norm(ray_samples.frustums.get_positions().reshape(-1, 128, 3)[idx_original]
+        #                        - ray_samples.frustums.origins.reshape(-1, 128, 3)[idx_original], dim=-1).cpu().numpy()  # (128), distance to camera origin
+        #         # Plot the histogram
+        #         plt.plot(t, w[idx_original].cpu().numpy(), color='mediumpurple', marker='o', linestyle='-', linewidth=1.5, markersize=2)
+        #         plt.xlabel('Euclidean Distance to the Camera Origin')
+        #         plt.ylabel('Weights of Sample Points')
+        #         plt.title(f'Weights of Sample Points Along Ray {idx_original}')
+        #         plt.grid(True)
+        #
+        #         # get all intersections
+        #         origin = ray_samples.frustums.origins  # (4096, 128, 3)
+        #         t_wall = ray_bundle.fars.squeeze() - 1e-3  # (4096)
+        #         plt.axvline(x=t_wall[idx_original].cpu().numpy(), color='orange', linestyle='--', linewidth=1.5, label='Wall')
+        #
+        #         intersections = ray_samples.frustums.intersections  # (4096, 128, 3)
+        #         t_intersection = 0
+        #         intersection_prev = origin[idx_original, 0]
+        #         for i in range(len(intersections_list) - 1):
+        #             if torch.where(idx_list[i] == idx_original)[0].shape[0] > 0:
+        #                 t_intersection += torch.norm(intersections[i, idx_original, 0] - intersection_prev, dim=-1).cpu().numpy()  # (1)
+        #                 plt.axvline(x=t_intersection.item(), color='cornflowerblue', linestyle='--', linewidth=1.5, label=f'Intersection {i + 1}')
+        #                 intersection_prev = intersections[i, idx_original, 0]
+        #             else:
+        #                 break
+        #
+        #         plt.legend()
+        #
+        #         # Save the plot
+        #         plt.savefig(f'f_weights/weights_vs_ray_distance_{idx_original}.png')
+        #         plt.close()
+        #
+        #     import sys
+        #     sys.exit(0)
+        # ==============================================================================================================
+
         # # search for the first density > threshold, and recompute the weights for depth maps
         # threshold = 25
         # density = (field_outputs[FieldHeadNames.DENSITY])  # [32768, 256, 1]
@@ -433,16 +475,15 @@ class NerfactoModel(Model):
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples)
         rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref)
-        # rgb_l, rgb_ref_l = colors.srgb_to_linear(rgb), colors.srgb_to_linear(rgb_ref)
+        # rgb, rgb_ref = colors.srgb_to_linear(rgb), colors.srgb_to_linear(rgb_ref)  # Don't use it
 
         # Fresnel equation
         normals = ray_samples_ref.frustums.normals
         ray_reflection = RayReflection(ray_samples.frustums.origins, ray_samples.frustums.directions, ray_samples.frustums.get_positions(), 1.0 / 1.5)
         R = ray_reflection.fresnel_fn(normals)  # [4096]
         comp_rgb = R * rgb_ref + (1 - R) * rgb  # use fresnel equation to combine the two colors in linear space
-        comp_srgb = colors.linear_to_srgb(comp_rgb)  # convert back to sRGB
-        # make sure the output is in the range [0, 1]
-        comp_srgb = torch.clamp(comp_srgb, 0.0, 1.0)
+        # convert back to sRGB and make sure the output is in the range [0, 1]
+        comp_srgb = torch.clamp(colors.linear_to_srgb(comp_rgb), 0.0, 1.0)
 
         # depth = self.renderer_depth(weights=weights_for_depth, ray_samples=ray_samples)
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)  # [32768, 1]

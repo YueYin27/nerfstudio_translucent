@@ -86,13 +86,8 @@ class RayReflection:
         """
 
         # Move the original sample points onto the reflected ray
-        distances_to_intersection = torch.norm(self.positions - intersections, dim=-1)
-        distances_to_intersection[~mask] = float('nan')
-        updated_positions = intersections + distances_to_intersection.unsqueeze(2) * directions_new
-        self.positions[mask] = updated_positions[mask]
-        self.origins[mask] = origins_new[mask].clone()
-        self.directions[mask] = directions_new[mask].clone()
-
+        self.origins[mask] = origins_new[mask]
+        self.directions[mask] = directions_new[mask]
         self.directions = torch.nn.functional.normalize(self.directions, p=2, dim=-1)
 
-        return self.origins, self.directions, self.positions
+        return self.origins, self.directions
