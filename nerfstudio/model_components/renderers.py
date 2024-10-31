@@ -88,6 +88,7 @@ class RGBRenderer(nn.Module):
         Returns:
             Outputs rgb values.
         """
+
         if ray_indices is not None and num_rays is not None:
             # Necessary for packed samples from volumetric ray sampler
             if background_color == "last_sample":
@@ -223,7 +224,7 @@ class RGBRenderer(nn.Module):
         # )
 
         if not self.training:
-            torch.clamp_(rgb, min=0.0, max=1.0)  # make sure the rgb values are in the range [0, 1]
+            torch.clamp_(rgb, min=0.0, max=1.0)  # make sure the rgb values are in the range [0, 1] when not training
         return rgb
 
 

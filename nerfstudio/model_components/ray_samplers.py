@@ -25,6 +25,7 @@ from nerfacc import OccGridEstimator
 from torch import Tensor, nn
 
 from nerfstudio.cameras.rays import Frustums, RayBundle, RaySamples
+from nerfstudio.utils.plotly_utils import visualization
 
 
 class Sampler(nn.Module):
@@ -583,6 +584,7 @@ class ProposalNetworkSampler(Sampler):
 
         n = self.num_proposal_network_iterations
         weights = None
+        weights_ref = None
         ray_samples = None
         ray_samples_ref = None
         updated = self._steps_since_update > self.update_sched(self._step) or self._step < 10
@@ -599,34 +601,36 @@ class ProposalNetworkSampler(Sampler):
                 # Uniform sampling because we need to start with some samples
                 ray_samples = self.initial_sampler(ray_bundle, num_samples=num_samples)
                 # use the following for refraction
-                intersections, normals, directions = ray_samples.get_refracted_rays()
-
-                directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
-                origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
-                non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
-                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
-                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
+                intersections_list, normals, directions, mask_update, idx_list = ray_samples.get_refracted_rays()
+                # directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
+                # origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
+                # non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
+                # ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
+                # ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
+                # ray_samples_ref = self.initial_sampler(ray_bundle_ref, num_samples=num_samples)
+                # ray_samples_ref.frustums.normals = normals.clone()
                 ray_samples_ref = self.initial_sampler(ray_bundle_ref, num_samples=num_samples)
-                ray_samples_ref.frustums.normals = normals.clone()
-                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
+                ray_samples_ref.get_reflected_rays(intersections_list[0], normals, mask_update)
             else:
                 # PDF sampling based on the last samples and their weights
                 # Perform annealing to the weights. This will be a no-op if self._anneal is 1.0.
                 assert weights is not None
+                assert weights_ref is not None
                 annealed_weights = torch.pow(weights, self._anneal)
+                annealed_weights_ref = torch.pow(weights_ref, self._anneal)
+
                 ray_samples = self.pdf_sampler(ray_bundle, ray_samples, annealed_weights, num_samples=num_samples)
                 # use the following for refraction
-                intersections, normals, directions = ray_samples.get_refracted_rays()
-
-                # ray_bundle_ref = ray_bundle.clone()
-                directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
-                origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
-                non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
-                ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
-                ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
-                ray_samples_ref = self.pdf_sampler(ray_bundle_ref, ray_samples_ref, annealed_weights, num_samples=num_samples)
-                ray_samples_ref.frustums.normals = normals.clone()
-                # ray_samples_ref.get_reflected_rays(intersections, normals, masks)
+                intersections_list, normals, directions, mask_update, idx_list = ray_samples.get_refracted_rays()
+                # directions_ref = directions[:, 0, :].clone()  # (num_rays, 3)
+                # origins_ref = intersections[:, 0, :].clone() + directions_ref * 1e-5
+                # non_nan = ~torch.isnan(origins_ref).any(dim=-1)  # (num_rays)
+                # ray_bundle_ref.origins = torch.where(non_nan[:, None], origins_ref, ray_bundle_ref.origins)
+                # ray_bundle_ref.directions = torch.where(non_nan[:, None], directions_ref, ray_bundle_ref.directions)
+                # ray_samples_ref = self.pdf_sampler(ray_bundle_ref, ray_samples_ref, annealed_weights, num_samples=num_samples)
+                # ray_samples_ref.frustums.normals = normals.clone()
+                ray_samples_ref = self.pdf_sampler(ray_bundle_ref, ray_samples_ref, annealed_weights_ref, num_samples=num_samples)
+                ray_samples_ref.get_reflected_rays(intersections_list[0], normals, mask_update)
 
             if is_prop:
                 if updated:
@@ -638,19 +642,63 @@ class ProposalNetworkSampler(Sampler):
                         density = density_fns[i_level](ray_samples.frustums.get_positions())
                         density_ref = density_fns[i_level](ray_samples_ref.frustums.get_positions())
                 weights = ray_samples.get_weights(density)
-                # weights_list.append(weights)  # (num_rays, num_samples)
-                # ray_samples_list.append(ray_samples)
+                weights_list.append(weights)  # (num_rays, num_samples)
+                ray_samples_list.append(ray_samples)
                 weights_ref = ray_samples_ref.get_weights(density_ref)
-                # weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
-                # ray_samples_list_ref.append(ray_samples_ref)
-                weights_list.append(torch.cat([weights, weights_ref], dim=1))
-                ray_samples_list.append(ray_samples.concat_samples(ray_samples_ref))
+                weights_list_ref.append(weights_ref)  # (num_rays, num_samples)
+                ray_samples_list_ref.append(ray_samples_ref)
+
         if updated:
             self._steps_since_update = 0
 
+        # import matplotlib.pyplot as plt
+        # if self._anneal >= 0.9:
+        #     for n in range(idx_list[0].shape[0]):
+        #         # print sample points distance along the rays
+        #         idx_original = idx_list[0][n]
+        #         # assume this ray has intersections, t is the distance to the camera origin
+        #         t = torch.norm(ray_samples.frustums.get_positions().reshape(-1, 128, 3)[idx_original]
+        #                        - ray_samples.frustums.origins.reshape(-1, 128, 3)[idx_original], dim=-1).cpu().numpy()  # (128), distance to camera origin
+        #         # Plot the histogram
+        #         plt.hist(t, bins=30, range=(0, t[-1] + 1e-1), edgecolor='black')
+        #         plt.xlabel('Euclidean Distance to the Camera Origin')
+        #         plt.ylabel('Number of Sample Points')
+        #         plt.title(f'Histogram of Sample Points Along Ray {idx_original}')
+        #
+        #         # get all intersections
+        #         origin = ray_samples.frustums.origins  # (4096, 128, 3)
+        #         t_wall = ray_bundle.fars.squeeze() - 1e-3  # (4096)
+        #         plt.axvline(x=t_wall[idx_original].cpu().numpy(), color='orange', linestyle='--', linewidth=1.5, label='Wall')
+        #
+        #         intersections = ray_samples.frustums.intersections  # (4096, 128, 3)
+        #         t_intersection = 0
+        #         intersection_prev = origin[idx_original, 0]
+        #         for i in range(len(intersections_list)-1):
+        #             if torch.where(idx_list[i] == idx_original)[0].shape[0] > 0:
+        #                 t_intersection += torch.norm(intersections[i, idx_original, 0] - intersection_prev, dim=-1).cpu().numpy()  # (1)
+        #                 plt.axvline(x=t_intersection.item(), color='cornflowerblue', linestyle='--', linewidth=1.5, label=f'Intersection {i + 1}')
+        #                 intersection_prev = intersections[i, idx_original, 0]
+        #             else:
+        #                 break
+        #
+        #         plt.legend()
+        #
+        #         # Save the plot
+        #         plt.savefig(f'f/num_of_samples_vs_ray_distance_{idx_original}.png')
+        #         plt.close()
+
+            # import sys
+            # sys.exit(0)
+
+        # if self._anneal > 0.9:
+        #     visualization(ray_samples=ray_samples, idx_start=1111, idx_end=1112, file_name='ray_samples')
+        #     visualization(ray_samples=ray_samples, idx_start=1117, idx_end=1120, file_name='ray_samples')
+            # import sys
+            # sys.exit(0)
+
         assert ray_samples is not None
         assert ray_samples_ref is not None
-        return ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref
+        return ray_samples, weights_list, ray_samples_list, ray_samples_ref, weights_list_ref, ray_samples_list_ref, self._anneal, idx_list, intersections_list
 
 
 class NeuSSampler(Sampler):

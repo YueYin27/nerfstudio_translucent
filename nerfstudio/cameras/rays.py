@@ -33,7 +33,7 @@ from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
 # mesh = trimesh.load_mesh('/home/projects/u7535192/projects/nerfstudio_translucent/nerfstudio/cameras/ball.ply')
-mesh = trimesh.load_mesh('/home/projects/transdataset/simple/cube.ply')
+mesh = trimesh.load_mesh('/home/projects/transdataset/simple/ball1.ply')
 # mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
 # mesh = trimesh.load_mesh('/home/projects/transdataset/complex/household_items/Korken_jar.ply')
 
@@ -161,9 +161,9 @@ class RaySamples(TensorDataclass):
     """Function to convert bins to euclidean distance."""
     metadata: Optional[Dict[str, Shaped[Tensor, "*bs latent_dims"]]] = None
     """additional information relevant to generating ray samples"""
-
     times: Optional[Float[Tensor, "*batch 1"]] = None
     """Times at which rays are sampled"""
+    intersections: Optional[Float[Tensor, "*bs 3"]] = None
 
     def get_refracted_rays_ball(self) -> None:
         # 1. Get origins, directions, r1, r2
@@ -245,85 +245,44 @@ class RaySamples(TensorDataclass):
         # self.frustums.directions = directions_new
         # self.frustums.origins = origins_new
 
-    def get_refracted_rays_cube(self) -> None:
-        # Modify the origins and directions of frustums here
-        positions = self.frustums.get_positions()  # [4096, 48, 3] ([num_rays_per_batch, num_samples_per_ray, 3])
+    def solve_bg_intersection(self, origin, direction, shape='cube', radius=0.42):
+        if shape == 'cube':
+            # Calculate intersection t-values for each of the cube's planes
+            t_min = (torch.tensor([-radius, -radius, -radius], device=origin.device) - origin) / direction
+            t_max = (torch.tensor([radius, radius, radius], device=origin.device) - origin) / direction
 
-        # Modify positions based on known geometry and Snell's law
-        # 1. Get origins, directions, r1, r2 directly
-        origins = self.frustums.origins  # [4096, 48, 3]
-        directions = self.frustums.directions  # [4096, 48, 3]
-        r1, r2 = 1.0 / 1.50, 1.50 / 1.0
-        # TODO:
-        size = 2.0 * 0.1
+            # For each axis, find the entry and exit points
+            t_entry = torch.minimum(t_min, t_max)  # Closest intersection point along each axis
+            t_exit = torch.maximum(t_min, t_max)  # Farthest intersection point along each axis
 
-        # 2. Get normals from the geometry, calculate new directions, and update positions after the first refraction
-        ray_refraction_1 = GlassCubeRefraction(origins, directions, positions, r1, size)
-        intersections_1, normals_1 = ray_refraction_1.get_intersections_and_normals('in')  # [4096, 48, 3]
+            # Find the maximum entry and minimum exit across all axes
+            t_enter = torch.max(t_entry, dim=-1).values
+            t_exit = torch.min(t_exit, dim=-1).values
 
-        # ray_test = MeshRefraction(origins, directions, positions, r1)
-        # i1, n1, m1 = ray_test.get_intersections_and_normals(mesh)
-        # # unit test: check if the two methods shapes are the same
-        # nan_mask_1 = torch.isnan(intersections_1)
-        # nan_mask_2 = torch.isnan(i1)
-        # combined_non_nan_mask = ~nan_mask_1 & ~nan_mask_2
-        # abs_diff = torch.abs(intersections_1[combined_non_nan_mask] - i1[combined_non_nan_mask])
-        # num_different_values = torch.sum(abs_diff > 0.001).item()
-        # num_non_nan_1 = torch.sum(~nan_mask_1).item()
-        # num_non_nan_2 = torch.sum(~nan_mask_2).item()
-        # print(f"Number of different values: {num_different_values}")
-        # print(f"Number of non-NaN elements in intersections_1: {num_non_nan_1}")
-        # print(f"Number of non-NaN elements in i1: {num_non_nan_2}")
+            # Check for a valid intersection where t_enter < t_exit and t_exit > 0
+            valid_mask = (t_enter < t_exit) & (t_exit > 0)
 
-        directions_1 = ray_refraction_1.snell_fn(normals_1)
-        positions, mask_1 = ray_refraction_1.update_sample_points(intersections_1, directions_1, 'in',
-                                                                  torch.ones([positions.shape[0],
-                                                                              positions.shape[1]],
-                                                                             dtype=torch.bool,
-                                                                             device=positions.device))
+            # Choose the first positive intersection (t_enter) as the entry point to the cube
+            t_positive = torch.where(t_enter > 0, t_enter, t_exit)
+            return torch.where(valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
 
-        # 3. Get normals from the geometry, calculate new directions, and update positions after the second refraction
-        ray_refraction_2 = GlassCubeRefraction(intersections_1, directions_1, positions, r2, size)
-        intersections_2, normals_2 = ray_refraction_2.get_intersections_and_normals('out')
-        directions_2 = ray_refraction_2.snell_fn(-normals_2)
-        positions, mask_2 = ray_refraction_2.update_sample_points(intersections_2, directions_2, 'out', mask_1)
+        elif shape == 'ball':
+            # Compute the coefficients a, b, c for the quadratic equation
+            a = torch.sum(direction ** 2, dim=-1)  # a = dx^2 + dy^2 + dz^2
+            b = 2 * torch.sum(origin * direction, dim=-1)  # b = 2 * (x0*dx + y0*dy + z0*dz)
+            c = torch.sum(origin ** 2, dim=-1) - radius ** 2  # c = x0^2 + y0^2 + z0^2 - r^2
+            discriminant = b ** 2 - 4 * a * c  # Compute the discriminant
 
-        self.frustums.intersections = [intersections_1, intersections_2]
+            # Check for valid intersections (discriminant >= 0)
+            valid_mask = discriminant >= 0
 
-        # 4. Update ray_samples.frustums.directions
-        directions_new = directions.clone()
-        directions_new[mask_1] = directions_1[mask_1]
-        directions_new[mask_2] = directions_2[mask_2]
+            # Calculate the two possible t values
+            sqrt_discriminant = torch.sqrt(discriminant.clamp(min=0))  # Clamp to avoid NaN for negative values
+            t1 = (-b - sqrt_discriminant) / (2 * a)
+            t2 = (-b + sqrt_discriminant) / (2 * a)
 
-        # 5. Update ray_samples.frustums.origins
-        origins_new = origins.clone()
-        origins_1 = intersections_1 - directions_1 * torch.norm(origins - intersections_1, dim=-1).unsqueeze(2)
-        origins_2 = intersections_2 - directions_2 * (
-                torch.norm(origins - intersections_1, dim=-1) + torch.norm(intersections_1 - intersections_2,
-                                                                           dim=-1)).unsqueeze(2)
-        origins_new[mask_1] = origins_1[mask_1]
-        origins_new[mask_2] = origins_2[mask_2]
-
-        self.frustums.directions = directions_new
-        self.frustums.origins = origins_new
-
-    def solve_quadratic_equation(self, origin, direction, radius):
-        # Compute the coefficients a, b, c for the quadratic equation
-        a = torch.sum(direction ** 2, dim=-1)  # a = dx^2 + dy^2 + dz^2
-        b = 2 * torch.sum(origin * direction, dim=-1)  # b = 2 * (x0*dx + y0*dy + z0*dz)
-        c = torch.sum(origin ** 2, dim=-1) - radius ** 2  # c = x0^2 + y0^2 + z0^2 - r^2
-        discriminant = b ** 2 - 4 * a * c  # Compute the discriminant
-
-        # Check for valid intersections (discriminant >= 0)
-        valid_mask = discriminant >= 0
-
-        # Calculate the two possible t values
-        sqrt_discriminant = torch.sqrt(discriminant.clamp(min=0))  # Clamp to avoid NaN for negative values
-        t1 = (-b - sqrt_discriminant) / (2 * a)
-        t2 = (-b + sqrt_discriminant) / (2 * a)
-
-        t_positive = torch.where(t1 > 0, t1, t2)
-        return torch.where((t_positive > 0) & valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
+            t_positive = torch.where(t1 > 0, t1, t2)
+            return torch.where((t_positive > 0) & valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
 
     def update_far_plane(self, ray_bundle, ray_bundle_ref):
         """Update the far plane of the frustums.
@@ -342,6 +301,7 @@ class RaySamples(TensorDataclass):
         r = torch.ones(origins.shape[0], device=origins.device) * r1  # [4096]
         scale_factor = 0.1
         epsilon = 1e-4
+        eps_far = 1e-4
         num_samples_per_ray = self.frustums.origins.shape[1]
         radius = torch.tensor(4.2 * math.sqrt(3) * 0.1, device=origins.device)
 
@@ -364,16 +324,17 @@ class RaySamples(TensorDataclass):
         # 2. Get intersections and normals through the first refraction
         ray_refraction = MeshRefraction(origins, directions, positions, r)
         intersections, normals, mask, indices = ray_refraction.get_intersections_and_normals(scene, origins, directions, indices)  # [4096, 256, 3]
+        directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
+        distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256], distance from the origin to the first intersection
 
+        # Update the far plane of the reflection frustums
         ray_reflection = RayReflection(origins, directions, positions)
         directions_reflection = ray_reflection.get_reflected_directions(normals)
         directions_reflection = directions_reflection[indices][:, 0]  # [4096, 3]
-        far_new = self.solve_quadratic_equation(intersections.clone()[indices][:, 0] + directions_reflection * epsilon,
-                                                directions_reflection, radius)
+        far_new = self.solve_bg_intersection(intersections.clone()[indices][:, 0] + directions_reflection * epsilon,
+                                             directions_reflection, 'cube', 0.42) + distance[indices][:, 0] + eps_far
         ray_bundle_ref.fars[indices] = far_new.unsqueeze(-1)
 
-        directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
-        distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256], distance from the origin to the first intersection
         origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
         updated_origins, updated_directions, updated_positions, mask_update = ray_refraction.update_sample_points(
             intersections, origins_new, directions_new, mask)  # [4096, 256, 3], [4096, 256, 3], [4096, 256, 3], [4096, 256]
@@ -418,11 +379,9 @@ class RaySamples(TensorDataclass):
             intersections_prev = intersections_prev.view(-1, num_samples_per_ray, 3)  # [num_of_rays, 256, 3]
             intersections_prev = intersections_prev[:, 0]  # [num_of_rays, 3]
 
-            distance_last = self.solve_quadratic_equation(intersections_prev, directions_prev, radius)  # [num_of_rays], the distance from the intersection point to the far plane
+            distance_last = self.solve_bg_intersection(intersections_prev, directions_prev, 'cube',0.42) + eps_far  # [num_of_rays], the distance from the intersection point to the far plane
             distance_last = torch.where(mask[:, 0], torch.tensor(0.0, device=origins.device), distance_last)
-            # print('distance_last:', distance_last[:37])
-            t_acc = torch.where(mask[:, 0], distance[:, 0], distance_prev + distance_last + 1e-4)  # if mask is True, keep the accumulated distance, otherwise, add the distance to the far plane
-            # print('t_acc:', t_acc[:37])
+            t_acc = torch.where(mask[:, 0], distance[:, 0], distance_prev + distance_last)  # if mask is True, keep the accumulated distance, otherwise, add the distance to the far plane
             t_acc_list.append(t_acc)  # add the masked t_acc to the list
 
             r = torch.where(tir_mask, r, 1.0 / r)
@@ -447,10 +406,8 @@ class RaySamples(TensorDataclass):
             if num_non_nan_rows == 0 or i > 10:
                 break
 
-        # ray_bundle.fars = t_acc.unsqueeze(1)
         for j in range(i):
             ray_bundle.fars[indices_list[j]] = t_acc_list[j+1].unsqueeze(-1)
-        # print('ray_bundle.fars:', ray_bundle.fars[36])
 
     def get_refracted_rays(self):
         # 1. Get origins, directions, r1, r2
@@ -549,32 +506,31 @@ class RaySamples(TensorDataclass):
 
         origins_final = origins.clone()
         directions_final = directions.clone()
+        intersections = intersections_list[0].unsqueeze(0).repeat(i, 1, 1, 1)
 
         for j in range(i-1):
             origins_final[indices_list[j]] = updated_origins_list[j+1]
             directions_final[indices_list[j]] = updated_directions_list[j+1]
+            intersections[j+1][indices_list[j]] = intersections_list[j+1]
 
         self.frustums.origins = origins_final
         self.frustums.directions = directions_final
+        self.frustums.intersections = intersections
 
-        return intersections_list[0], normals_first, directions_reflection
+        return intersections_list, normals_first, directions_reflection, mask_update, indices_list
 
     def get_reflected_rays(self, intersections, normals, masks) -> None:
         origins = self.frustums.origins.clone()
         directions = self.frustums.directions.clone()
         positions = self.frustums.get_positions().clone()
         intersections, normals, mask = intersections.clone(), normals.clone(), masks.clone()
-        r1 = 1.0 / 1.5
 
         # 1) Get reflective directions
         ray_reflection = RayReflection(origins, directions, positions)
         directions_new = ray_reflection.get_reflected_directions(normals)
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256]
         origins_new = intersections - directions_new * distance.unsqueeze(-1)
-        updated_origins, updated_directions, updated_positions = ray_reflection.update_sample_points(intersections,
-                                                                                                     origins_new,
-                                                                                                     directions_new,
-                                                                                                     mask)
+        updated_origins, updated_directions = ray_reflection.update_sample_points(intersections, origins_new, directions_new, mask)
         # 2) Update ray_samples.frustums.directions
         directions_final = directions.clone()
         directions_final[mask] = updated_directions[mask]
@@ -783,6 +739,7 @@ class RayBundle(TensorDataclass):
             Samples projected along ray.
         """
         deltas = bin_ends - bin_starts  # [4096, num_samples, 1]
+
         if self.camera_indices is not None:
             camera_indices = self.camera_indices[..., None]
         else:
