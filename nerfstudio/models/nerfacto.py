@@ -398,7 +398,7 @@ class NerfactoModel(Model):
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])  # [32768, 128, 1]
         weights_ref = ray_samples_ref.get_weights(field_outputs_ref[FieldHeadNames.DENSITY])  # [32768, 128, 1]
 
-        # if anneal >= 0.9:
+        # if anneal >= 0.99:
         #     w = weights.clone().detach()
         #     for n in range(idx_list[0].shape[0]):
         #         # print sample points distance along the rays
@@ -432,7 +432,7 @@ class NerfactoModel(Model):
         #         plt.legend()
         #
         #         # Save the plot
-        #         plt.savefig(f'f_weights/weights_vs_ray_distance_{idx_original}.png')
+        #         plt.savefig(f'figures_weights/weights_vs_ray_distance_{idx_original}.png')
         #         plt.close()
         #
         #     import sys
@@ -473,8 +473,13 @@ class NerfactoModel(Model):
         weights_list_ref.append(weights_ref)
         ray_samples_list_ref.append(ray_samples_ref)
 
-        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples)
-        rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref)
+        if anneal < 0.99:
+            background_color = "last_sample"
+        else:
+            background_color = "random"
+
+        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples, background_color=background_color)
+        rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref, background_color=background_color)
         # rgb, rgb_ref = colors.srgb_to_linear(rgb), colors.srgb_to_linear(rgb_ref)  # Don't use it
 
         # Fresnel equation

@@ -186,6 +186,7 @@ class RGBRenderer(nn.Module):
         self,
         rgb: Float[Tensor, "*bs num_samples 3"],
         weights: Float[Tensor, "*bs num_samples 1"],
+        background_color,
         ray_indices: Optional[Int[Tensor, "num_samples"]] = None,
         num_rays: Optional[int] = None,
         ray_samples: RaySamples = None,
@@ -214,7 +215,7 @@ class RGBRenderer(nn.Module):
 
         # to run original nerfacto
         rgb = self.combine_rgb(
-            rgb, weights, background_color=self.background_color, ray_indices=ray_indices, num_rays=num_rays
+            rgb, weights, background_color=background_color, ray_indices=ray_indices, num_rays=num_rays
         )
 
         # to enable reflection and refraction
