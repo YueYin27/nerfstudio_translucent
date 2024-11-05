@@ -652,7 +652,7 @@ class ProposalNetworkSampler(Sampler):
             self._steps_since_update = 0
 
         # import matplotlib.pyplot as plt
-        # if self._anneal >= 0.9:
+        # if self._anneal >= 0.98:
         #     for n in range(idx_list[0].shape[0]):
         #         # print sample points distance along the rays
         #         idx_original = idx_list[0][n]
@@ -684,17 +684,17 @@ class ProposalNetworkSampler(Sampler):
         #         plt.legend()
         #
         #         # Save the plot
-        #         plt.savefig(f'f/num_of_samples_vs_ray_distance_{idx_original}.png')
+        #         plt.savefig(f'figures/num_of_samples_vs_ray_distance_{idx_original}.png')
         #         plt.close()
-
-            # import sys
-            # sys.exit(0)
-
-        # if self._anneal > 0.9:
+        #
+        #     # import sys
+        #     # sys.exit(0)
+        #
+        # if self._anneal > 0.98:
         #     visualization(ray_samples=ray_samples, idx_start=1111, idx_end=1112, file_name='ray_samples')
         #     visualization(ray_samples=ray_samples, idx_start=1117, idx_end=1120, file_name='ray_samples')
-            # import sys
-            # sys.exit(0)
+        #     # import sys
+        #     # sys.exit(0)
 
         assert ray_samples is not None
         assert ray_samples_ref is not None
