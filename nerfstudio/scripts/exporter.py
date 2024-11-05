@@ -427,7 +427,7 @@ class ExportCameraPoses(Exporter):
         assert isinstance(pipeline, VanillaPipeline)
         train_frames, eval_frames = collect_camera_poses(pipeline)
 
-        for file_name, frames in [("transforms_train.json", train_frames), ("transforms_eval.json", eval_frames)]:
+        for file_name, frames in [("transforms_train.json", train_frames), ("transforms_val.json", eval_frames)]:
             if len(frames) == 0:
                 CONSOLE.print(f"[bold yellow]No frames found for {file_name}. Skipping.")
                 continue
