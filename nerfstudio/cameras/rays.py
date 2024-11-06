@@ -32,14 +32,16 @@ from nerfstudio.utils.math import Gaussians, conical_frustum_to_gaussian
 from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
-# mesh = trimesh.load_mesh('/home/projects/u7535192/projects/nerfstudio_translucent/nerfstudio/cameras/ball.ply')
-# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/simple_shapes/cube.ply')
-mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/household_items/candle_holder_glass.ply')
-# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/complex_shapes/generic_sculpture.ply')
-# mesh = trimesh.load_mesh('/home/projects/transdataset/medium/cat.ply')
-# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/beaker_glass.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/simple_shapes/beaker.ply')
+mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/complex_shapes/cow.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/household_items/crystal_vase.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/lab_equipment_set.ply')
 # mesh_water = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/beaker_water.ply')
+# mesh_glass = trimesh.load_mesh('/workspace/RefRef/mesh_files/lab_equipment/beaker_glass.ply')
+# mesh_water = trimesh.load_mesh('/workspace/RefRef/mesh_files/lab_equipment/beaker_water.ply')
 IoR = 1.5
+BG_SHAPE = 'sphere'
+BG_RADIUS = 0.73
 
 @dataclass
 class Frustums(TensorDataclass):
@@ -270,7 +272,7 @@ class RaySamples(TensorDataclass):
             t_positive = torch.where(t_enter > 0, t_enter, t_exit)
             return torch.where(valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
 
-        elif shape == 'ball':
+        elif shape == 'sphere':
             # Compute the coefficients a, b, c for the quadratic equation
             a = torch.sum(direction ** 2, dim=-1)  # a = dx^2 + dy^2 + dz^2
             b = 2 * torch.sum(origin * direction, dim=-1)  # b = 2 * (x0*dx + y0*dy + z0*dz)
@@ -338,7 +340,7 @@ class RaySamples(TensorDataclass):
         directions_reflection = ray_reflection.get_reflected_directions(normals)
         directions_reflection = directions_reflection[indices][:, 0]  # [4096, 3]
         far_new = self.solve_bg_intersection(intersections.clone()[indices][:, 0] + directions_reflection * epsilon,
-                                             directions_reflection, 'cube', 0.42) + distance[indices][:, 0] + eps_far
+                                             directions_reflection, BG_SHAPE, BG_RADIUS) + distance[indices][:, 0] + eps_far
         ray_bundle_ref.fars[indices] = far_new.unsqueeze(-1)
 
         origins_new = intersections - directions_new * distance.unsqueeze(-1)  # [4096, 256, 3]
@@ -385,7 +387,7 @@ class RaySamples(TensorDataclass):
             intersections_prev = intersections_prev.view(-1, num_samples_per_ray, 3)  # [num_of_rays, 256, 3]
             intersections_prev = intersections_prev[:, 0]  # [num_of_rays, 3]
 
-            distance_last = self.solve_bg_intersection(intersections_prev, directions_prev, 'cube',0.42) + eps_far  # [num_of_rays], the distance from the intersection point to the far plane
+            distance_last = self.solve_bg_intersection(intersections_prev, directions_prev, BG_SHAPE,BG_RADIUS) + eps_far  # [num_of_rays], the distance from the intersection point to the far plane
             distance_last = torch.where(mask[:, 0], torch.tensor(0.0, device=origins.device), distance_last)
             t_acc = torch.where(mask[:, 0], distance[:, 0], distance_prev + distance_last)  # if mask is True, keep the accumulated distance, otherwise, add the distance to the far plane
             t_acc_list.append(t_acc)  # add the masked t_acc to the list

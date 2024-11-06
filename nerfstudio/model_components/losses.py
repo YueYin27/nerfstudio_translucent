@@ -157,6 +157,7 @@ def lossfun_distortion_ref(t, w, ray_samples):
     rows = change_indices[:, 0]
     cols = change_indices[:, 1] + 1  # Adjust to the original 128-size dimension
 
+    # find the indices of the first and last intersections
     start = torch.full((origins.size(0),), -1, dtype=torch.long, device=device)
     end = torch.full((origins.size(0),), -1, dtype=torch.long, device=device)
     start.index_put_((rows,), cols, accumulate=False)
