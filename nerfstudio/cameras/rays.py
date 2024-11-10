@@ -32,16 +32,18 @@ from nerfstudio.utils.math import Gaussians, conical_frustum_to_gaussian
 from nerfstudio.utils.tensor_dataclass import TensorDataclass
 
 TORCH_DEVICE = Union[str, torch.device]
-# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/simple_shapes/beaker.ply')
-mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/complex_shapes/cow.ply')
-# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/household_items/crystal_vase.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/simple_shapes/torus_coloured.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/complex_shapes/man_sculpture.ply')
+# mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/household_items/Vardagen_jar.ply')
 # mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/lab_equipment_set.ply')
 # mesh_water = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/beaker_water.ply')
-# mesh_glass = trimesh.load_mesh('/workspace/RefRef/mesh_files/lab_equipment/beaker_glass.ply')
-# mesh_water = trimesh.load_mesh('/workspace/RefRef/mesh_files/lab_equipment/beaker_water.ply')
+mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/syringe_glass.ply')
+mesh_water = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/syringe_water.ply')
 IoR = 1.5
+n_dict = {'air': 1.0, 'glass': 1.5, 'water': 1.33}
 BG_SHAPE = 'sphere'
-BG_RADIUS = 0.73
+# BG_RADIUS = 0.73
+BG_RADIUS = 0.42
 
 @dataclass
 class Frustums(TensorDataclass):
@@ -290,7 +292,7 @@ class RaySamples(TensorDataclass):
             t_positive = torch.where(t1 > 0, t1, t2)
             return torch.where((t_positive > 0) & valid_mask, t_positive, torch.tensor(float('inf'), device=direction.device))
 
-    def update_far_plane(self, ray_bundle, ray_bundle_ref):
+    def update_far_plane0(self, ray_bundle, ray_bundle_ref):
         """Update the far plane of the frustums.
 
         Args:
@@ -417,7 +419,7 @@ class RaySamples(TensorDataclass):
         for j in range(i):
             ray_bundle.fars[indices_list[j]] = t_acc_list[j+1].unsqueeze(-1)
 
-    def update_far_plane1(self, ray_bundle, ray_bundle_ref):
+    def update_far_plane(self, ray_bundle, ray_bundle_ref):
         """Update the far plane of the frustums.
 
         Args:
@@ -432,9 +434,11 @@ class RaySamples(TensorDataclass):
         n_air, n_glass, n_water = 1.0, 1.5, 1.33
         # create a tensor r of shape [4096] with all elements equal to 1.0 / 1.5
         r = torch.ones(origins.shape[0], device=origins.device) * n_air / n_glass  # [4096]
+        n_init = torch.ones(origins.shape[0], device=origins.device) * n_dict['air']  # [4096]
         scale_factor = 0.1
         epsilon = 1e-4
         eps_far = 1e-3
+        eps_inter = 1e-3
         num_samples_per_ray = self.frustums.origins.shape[1]
         radius = torch.tensor(4.2 * math.sqrt(3) * 0.1, device=origins.device)
 
@@ -459,6 +463,8 @@ class RaySamples(TensorDataclass):
         updated_directions_list = []
         indices_list = []
         t_acc_list = []
+        n_list = []
+        mask_inter_list = []
         indices = torch.arange(origins.shape[0], device=origins.device)  # a tensor of indices from 0 to 4095
 
         # 2. Get intersections and normals through the first refraction
@@ -469,15 +475,18 @@ class RaySamples(TensorDataclass):
         # remove the NaN values from the intersections mask
         glass = torch.where(mask_glass.unsqueeze(-1), intersections_glass, float('inf') * torch.ones_like(intersections_glass))
         water = torch.where(mask_water.unsqueeze(-1), intersections_water, float('inf') * torch.ones_like(intersections_water))
-        mask_closer = (torch.norm(origins - glass, dim=-1) < torch.norm(origins - water, dim=-1))  # True if the glass intersection is closer, [4096, 256]
+        mask_gcloser = (torch.norm(origins - glass, dim=-1) < torch.norm(origins - water, dim=-1))  # True if the glass intersection is closer, [4096, 256]
+        mask_dist_smaller = torch.norm(glass - water, dim=-1) < eps_inter  # True if the distance between the two intersections is smaller than eps_inter
+        mask_inter = mask_gcloser ^ mask_dist_smaller  # True if values are different, meaning that the current intersection is glass, otherwise water
 
-        intersections = torch.where(mask_closer.unsqueeze(-1), intersections_glass, intersections_water)
-        normals = torch.where(mask_closer.unsqueeze(-1), normals_glass, normals_water)
-        mask = torch.where(mask_closer, mask_glass, mask_water)  # [4096, 256]
+        intersections = torch.where(mask_inter.unsqueeze(-1), intersections_glass, intersections_water)
+        normals = torch.where(mask_inter.unsqueeze(-1), normals_glass, normals_water)
+        mask = torch.where(mask_inter, mask_glass, mask_water)  # [4096, 256]
         indices = torch.unique(torch.cat([indices_glass, indices_water], dim=0))
-        # print the number of true rows in mask_closer
 
-        ray_refraction.r = torch.where(mask_closer[:, 0], r, torch.ones_like(r) * n_air / n_water)  # update r
+        # update n and r
+        n = torch.where(mask_inter[:, 0], n_dict['glass'], n_dict['water'])  # update n
+        ray_refraction.r = n_init / n  # update r for this refraction
 
         directions_new, tir_mask = ray_refraction.snell_fn(normals, directions)  # [4096, 256, 3]
         distance = torch.norm(origins - intersections, dim=-1)  # [4096, 256], distance from the origin to the first intersection
@@ -501,6 +510,8 @@ class RaySamples(TensorDataclass):
         updated_origins_list.append(updated_origins)
         updated_directions_list.append(updated_directions)
         indices_list.append(indices)
+        n_list.append(n)
+        mask_inter_list.append(mask_inter)
 
         # r = torch.where(tir_mask, r1, r2)
         r = r[mask[:, 0]]  # [4096]
@@ -521,32 +532,41 @@ class RaySamples(TensorDataclass):
             # remove the NaN values from the intersections mask
             glass = torch.where(mask_glass.unsqueeze(-1), intersections_glass, float('inf') * torch.ones_like(intersections_glass))
             water = torch.where(mask_water.unsqueeze(-1), intersections_water, float('inf') * torch.ones_like(intersections_water))
-            mask_closer = (torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - glass, dim=-1)
-                                  < torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - water, dim=-1))
+            mask_gcloser = (torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - glass, dim=-1) < torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - water, dim=-1))
+            mask_dist_smaller = torch.norm(glass - water, dim=-1) < eps_inter  # True if the distance between the two intersections is smaller than eps_inter
+            mask_inter = mask_gcloser ^ mask_dist_smaller  # True if values are different, meaning that the current intersection is glass, otherwise water
 
-            intersections = torch.where(mask_closer.unsqueeze(-1), intersections_glass, intersections_water)
-            normals = torch.where(mask_closer.unsqueeze(-1), normals_glass, normals_water)
-            mask = torch.where(mask_closer, mask_glass, mask_water)
+            intersections = torch.where(mask_inter.unsqueeze(-1), intersections_glass, intersections_water)
+            normals = torch.where(mask_inter.unsqueeze(-1), normals_glass, normals_water)
+            cos_theta = torch.sum(normals[:, 0, :] * directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3)[:, 0, :], dim=-1)  # [num_of_rays]
+            normals = torch.where((cos_theta < 0)[:, None, None], normals, -normals)  # Update normal: if the angle > 90 degrees (cos_theta < 0), preserve the normals, otherwise, flip the normals
+            mask = torch.where(mask_inter, mask_glass, mask_water)
             indices = torch.unique(torch.cat([indices_glass, indices_water], dim=0))
 
-            # TODO: Update r for this refraction
-            in_glass = torch.logical_and(mask_closer[:, 0], mask_in)
-            in_water = torch.logical_and(~mask_closer[:, 0], mask_in)
-            out_glass = torch.logical_and(mask_closer[:, 0], ~mask_in)
-            out_water = torch.logical_and(~mask_closer[:, 0], ~mask_in)
-            ray_refraction.r = torch.where(in_glass, n_glass/n_air, torch.ones_like(r) * n_glass / n_air)
-            ray_refraction.r = torch.where(in_water, n_water/n_air, torch.ones_like(r) * n_water / n_air)
-            ray_refraction.r = torch.where(out_glass, n_air/n_glass, torch.ones_like(r) * n_air / n_glass)
-            ray_refraction.r = torch.where(out_water, n_air/n_water, torch.ones_like(r) * n_air / n_water)
-            # # check if the two intersection points are close enough
-            # mask_close = torch.norm(intersections_glass - intersections_water, dim=-1) < 1e-3
-            # ray_refraction.r = torch.where(mask_closer, r, torch.ones_like(r) * n_air / n_water)  # update r
+            # initial update of n and tir_mask
+            n = torch.where(mask_inter[:, 0], n_dict['glass'], n_dict['water'])  # n in most cases
+            n_prev = n_list[i][mask_list[i][:, 0]]
+            tir_mask = ray_refraction.tir_update_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3), mask_inter[:, 0], n_prev, n)  # [4096, 256]
 
-            normals = torch.where(mask_in[:, None, None], -normals, normals)
+            # update the intersections and normals if TIR happens from glass to water
+            mask_inter_update = torch.logical_and(tir_mask[:, None, None], mask_dist_smaller.unsqueeze(-1))
+            intersections = torch.where(mask_inter_update, intersections_glass, intersections)
+            normals = torch.where(mask_inter_update, -normals_glass, normals)
+            mask = torch.where(mask_inter_update.squeeze(-1), mask_glass, mask)
+
+            # final update of n
+            case1 = torch.logical_and(torch.logical_and(torch.logical_and(mask_inter[:, 0], n_prev == n_dict['glass']), ~tir_mask), mask_in)
+            case2 = torch.logical_and(torch.logical_and(torch.logical_and(~mask_inter[:, 0], n_prev == n_dict['water']), ~tir_mask), mask_in)
+            case3 = torch.logical_and(torch.logical_and(torch.logical_and(mask_inter[:, 0], n_prev == n_dict['glass']), tir_mask), mask_in)
+            case4 = torch.logical_and(torch.logical_and(torch.logical_and(~mask_inter[:, 0], n_prev == n_dict['water']), tir_mask), mask_in)
+            n = torch.where(torch.logical_or(case1, case2), n_dict['air'], n)  # n in case 1 or case 2
+            n = torch.where(torch.logical_or(case3, case4), n_prev, n)  # n in case 3 or case 4
+            ray_refraction.r = n_prev / n
+
             directions_prev = directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3).clone()
             directions_prev = directions_prev[:, 0]  # [num_of_rays, 3]
+            directions_new, _ = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
 
-            directions_new, tir_mask = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
             distance_prev = distance[mask_list[i]].reshape(-1, num_samples_per_ray)[:, 0]  # store the previous distance
             distance = distance[mask_list[i]] + torch.norm(
                 intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)  # [num_of_rays, 256], the accumulated distance from the origin
@@ -567,7 +587,8 @@ class RaySamples(TensorDataclass):
 
             # r = torch.where(tir_mask, r, 1.0 / r)
             r = r[mask[:, 0]]
-            mask_in = torch.where(tir_mask, mask_in, ~mask_in)
+            # mask_in = torch.where(tir_mask, mask_in, ~mask_in)
+            mask_in = n != n_dict['air']
             mask_in = mask_in[mask[:, 0]]
 
             intersections_list.append(intersections)
@@ -575,6 +596,8 @@ class RaySamples(TensorDataclass):
             updated_origins_list.append(updated_origins)
             updated_directions_list.append(updated_directions)
             indices_list.append(indices)
+            n_list.append(n)
+            mask_inter_list.append(mask_inter)
 
             i += 1
 
@@ -590,7 +613,7 @@ class RaySamples(TensorDataclass):
         for j in range(i):
             ray_bundle.fars[indices_list[j]] = t_acc_list[j+1].unsqueeze(-1)
 
-    def get_refracted_rays1(self):
+    def get_refracted_rays(self):
         # 1. Get origins, directions, r1, r2
         origins = self.frustums.origins.clone()  # [4096, 256, 3]
         directions = self.frustums.directions.clone()  # [4096, 256, 3]
@@ -598,9 +621,11 @@ class RaySamples(TensorDataclass):
         n_air, n_glass, n_water = 1.0, 1.5, 1.33
         # create a tensor r of shape [4096] with all elements equal to 1.0 / 1.5
         r = torch.ones(origins.shape[0], device=origins.device) * n_air / n_glass  # [4096]
+        n_init = torch.ones(origins.shape[0], device=origins.device) * n_dict['air']  # [4096]
         scale_factor = 0.1
         epsilon = 1e-4
         eps_far = 1e-3
+        eps_inter = 1e-3
         num_samples_per_ray = self.frustums.origins.shape[1]
 
         # Convert trimesh vertices and faces to tensors and create a RaycastingScene for glass
@@ -623,6 +648,8 @@ class RaySamples(TensorDataclass):
         updated_origins_list = []
         updated_directions_list = []
         indices_list = []
+        n_list = []
+        mask_inter_list = []
         indices = torch.arange(origins.shape[0], device=origins.device)  # a tensor of indices from 0 to 4095
 
         # 2. Get intersections and normals through the first refraction
@@ -633,13 +660,18 @@ class RaySamples(TensorDataclass):
         # remove the NaN values from the intersections mask
         glass = torch.where(mask_glass.unsqueeze(-1), intersections_glass, float('inf') * torch.ones_like(intersections_glass))
         water = torch.where(mask_water.unsqueeze(-1), intersections_water, float('inf') * torch.ones_like(intersections_water))
-        mask_closer = (torch.norm(origins - glass, dim=-1) < torch.norm(origins - water, dim=-1))  # True if the glass intersection is closer, [4096, 256]
+        mask_gcloser = (torch.norm(origins - glass, dim=-1) < torch.norm(origins - water, dim=-1))  # True if the glass intersection is closer, [4096, 256]
+        mask_dist_smaller = torch.norm(glass - water, dim=-1) < eps_inter  # True if the distance between the two intersections is smaller than eps_inter
+        mask_inter = mask_gcloser ^ mask_dist_smaller
 
-        intersections = torch.where(mask_closer.unsqueeze(-1), intersections_glass, intersections_water)
-        normals = torch.where(mask_closer.unsqueeze(-1), normals_glass, normals_water)
-        mask = torch.where(mask_closer, mask_glass, mask_water)  # [4096, 256]
+        intersections = torch.where(mask_inter.unsqueeze(-1), intersections_glass, intersections_water)
+        normals = torch.where(mask_inter.unsqueeze(-1), normals_glass, normals_water)
+        mask = torch.where(mask_inter, mask_glass, mask_water)  # [4096, 256]
         indices = torch.unique(torch.cat([indices_glass, indices_water], dim=0))
-        ray_refraction.r = torch.where(mask_closer[:, 0], r, torch.ones_like(r) * n_air / n_water)  # update r
+
+        # update n and r
+        n = torch.where(mask_inter[:, 0], n_dict['glass'], n_dict['water'])  # update n
+        ray_refraction.r = n_init / n  # update r for this refraction
 
         normals_first = normals.clone()
         ray_reflection = RayReflection(origins, directions, positions)
@@ -656,6 +688,8 @@ class RaySamples(TensorDataclass):
         updated_origins_list.append(updated_origins)
         updated_directions_list.append(updated_directions)
         indices_list.append(indices)
+        n_list.append(n)
+        mask_inter_list.append(mask_inter)
 
         # r = torch.where(tir_mask, r1, r2)
         r = r[mask[:, 0]]  # [4096]
@@ -669,38 +703,46 @@ class RaySamples(TensorDataclass):
                                             updated_directions[mask_list[i]].view(-1, num_samples_per_ray, 3),
                                             updated_positions[mask_list[i]].view(-1, num_samples_per_ray, 3), r)
             intersections_offset = intersections_list[i] + directions_new * epsilon
-            intersections_glass, normals_glass, mask_glass, indices_glass = ray_refraction.get_intersections_and_normals(scene_glass,
-                                                                                                                         intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
+            intersections_glass, normals_glass, mask_glass, indices_glass = ray_refraction.get_intersections_and_normals(scene_glass, intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
                                                                                                                          directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3), indices_list[i])
-            intersections_water, normals_water, mask_water, indices_water = ray_refraction.get_intersections_and_normals(scene_water,
-                                                                                                                         intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
+            intersections_water, normals_water, mask_water, indices_water = ray_refraction.get_intersections_and_normals(scene_water, intersections_offset[mask_list[i]].view(-1, num_samples_per_ray, 3),
                                                                                                                          directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3), indices_list[i])
             # remove the NaN values from the intersections mask
             glass = torch.where(mask_glass.unsqueeze(-1), intersections_glass, float('inf') * torch.ones_like(intersections_glass))
             water = torch.where(mask_water.unsqueeze(-1), intersections_water, float('inf') * torch.ones_like(intersections_water))
-            mask_closer = (torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - glass, dim=-1)
-                           < torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - water, dim=-1))
+            mask_gcloser = (torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - glass, dim=-1) < torch.norm(origins_new[mask_list[i]].view(-1, num_samples_per_ray, 3) - water, dim=-1))
+            mask_dist_smaller = torch.norm(glass - water, dim=-1) < eps_inter  # True if the distance between the two intersections is smaller than eps_inter
+            mask_inter = mask_gcloser ^ mask_dist_smaller
 
-            intersections = torch.where(mask_closer.unsqueeze(-1), intersections_glass, intersections_water)
-            normals = torch.where(mask_closer.unsqueeze(-1), normals_glass, normals_water)
-            mask = torch.where(mask_closer, mask_glass, mask_water)
+            intersections = torch.where(mask_inter.unsqueeze(-1), intersections_glass, intersections_water)
+            normals = torch.where(mask_inter.unsqueeze(-1), normals_glass, normals_water)
+            cos_theta = torch.sum(normals[:, 0, :] * directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3)[:, 0, :], dim=-1)  # [num_of_rays]
+            normals = torch.where((cos_theta < 0)[:, None, None], normals, -normals)  # Update normal: if the angle > 90 degrees (cos_theta < 0), preserve the normals, otherwise, flip the normals
+            mask = torch.where(mask_inter, mask_glass, mask_water)
             indices = torch.unique(torch.cat([indices_glass, indices_water], dim=0))
 
-            # TODO: Update r for this refraction
-            in_glass = torch.logical_and(mask_closer[:, 0], mask_in)
-            in_water = torch.logical_and(~mask_closer[:, 0], mask_in)
-            out_glass = torch.logical_and(mask_closer[:, 0], ~mask_in)
-            out_water = torch.logical_and(~mask_closer[:, 0], ~mask_in)
-            ray_refraction.r = torch.where(in_glass, n_glass / n_air, torch.ones_like(r) * n_glass / n_air)
-            ray_refraction.r = torch.where(in_water, n_water / n_air, torch.ones_like(r) * n_water / n_air)
-            ray_refraction.r = torch.where(out_glass, n_air / n_glass, torch.ones_like(r) * n_air / n_glass)
-            ray_refraction.r = torch.where(out_water, n_air / n_water, torch.ones_like(r) * n_air / n_water)
-            # # check if the two intersection points are close enough
-            # mask_close = torch.norm(intersections_glass - intersections_water, dim=-1) < 1e-3
-            # ray_refraction.r = torch.where(mask_closer, r, torch.ones_like(r) * n_air / n_water)  # update r
+            # initial update of n and tir_mask
+            n = torch.where(mask_inter[:, 0], n_dict['glass'], n_dict['water'])  # n in most cases
+            n_prev = n_list[i][mask_list[i][:, 0]]
+            tir_mask = ray_refraction.tir_update_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3), mask_inter[:, 0], n_prev, n)  # [4096, 256]
 
-            normals = torch.where(mask_in[:, None, None], -normals, normals)
-            directions_new, tir_mask = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
+            # update the intersections and normals if TIR happens from glass to water
+            mask_inter_update = torch.logical_and(tir_mask[:, None, None], mask_dist_smaller.unsqueeze(-1))
+            intersections = torch.where(mask_inter_update, intersections_glass, intersections)
+            normals = torch.where(mask_inter_update, -normals_glass, normals)
+            mask = torch.where(mask_inter_update.squeeze(-1), mask_glass, mask)
+
+            # final update of n
+            case1 = torch.logical_and(torch.logical_and(torch.logical_and(mask_inter[:, 0], n_prev == n_dict['glass']), ~tir_mask), mask_in)
+            case2 = torch.logical_and(torch.logical_and(torch.logical_and(~mask_inter[:, 0], n_prev == n_dict['water']), ~tir_mask), mask_in)
+            case3 = torch.logical_and(torch.logical_and(torch.logical_and(mask_inter[:, 0], n_prev == n_dict['glass']), tir_mask), mask_in)
+            case4 = torch.logical_and(torch.logical_and(torch.logical_and(~mask_inter[:, 0], n_prev == n_dict['water']), tir_mask), mask_in)
+            n = torch.where(torch.logical_or(case1, case2), n_dict['air'], n)  # n in case 1 or case 2
+            n = torch.where(torch.logical_or(case3, case4), n_prev, n)  # n in case 3 or case 4
+            ray_refraction.r = n_prev / n
+
+            directions_new, _ = ray_refraction.snell_fn(normals, directions_new[mask_list[i]].view(-1, num_samples_per_ray, 3))  # negative normals because the ray is inside the surface
+
             distance = distance[mask_list[i]] + torch.norm(intersections_list[i][mask_list[i]] - intersections.view(-1, 3), dim=-1)  # [num_of_rays, 256], the accumulated distance from the origin
             origins_new = intersections - directions_new * distance.view(-1, num_samples_per_ray).unsqueeze(-1)
             distance = distance.reshape(-1, num_samples_per_ray)  # [num_of_rays, 256]
@@ -709,7 +751,8 @@ class RaySamples(TensorDataclass):
 
             # r = torch.where(tir_mask, r, 1.0 / r)
             r = r[mask[:, 0]]
-            mask_in = torch.where(tir_mask, mask_in, ~mask_in)
+            # mask_in = torch.where(tir_mask, mask_in, ~mask_in)
+            mask_in = n != n_dict['air']
             mask_in = mask_in[mask[:, 0]]
 
             intersections_list.append(intersections)
@@ -717,6 +760,8 @@ class RaySamples(TensorDataclass):
             updated_origins_list.append(updated_origins)
             updated_directions_list.append(updated_directions)
             indices_list.append(indices)
+            n_list.append(n)
+            mask_inter_list.append(mask_inter)
 
             i += 1
 
@@ -744,7 +789,7 @@ class RaySamples(TensorDataclass):
 
         return intersections_list, normals_first, directions_reflection, mask_update, indices_list
 
-    def get_refracted_rays(self):
+    def get_refracted_rays0(self):
         # 1. Get origins, directions, r1, r2
         origins = self.frustums.origins.clone()  # [4096, 256, 3]
         directions = self.frustums.directions.clone()  # [4096, 256, 3]

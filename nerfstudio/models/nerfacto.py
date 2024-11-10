@@ -477,6 +477,8 @@ class NerfactoModel(Model):
             background_color = "last_sample"
         else:
             background_color = "random"
+        # background_color = "last_sample"
+        # background_color = "random"
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights, ray_samples=ray_samples, background_color=background_color)
         rgb_ref = self.renderer_rgb(rgb=field_outputs_ref[FieldHeadNames.RGB], weights=weights_ref, ray_samples=ray_samples_ref, background_color=background_color)

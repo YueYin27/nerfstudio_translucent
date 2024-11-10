@@ -456,6 +456,7 @@ class MeshRefraction(RayRefraction):
 
         Args:
             n: surface normals
+            l: ray directions
         Returns:
             refracted directions or reflected directions in case of total internal reflection
         """
@@ -485,3 +486,31 @@ class MeshRefraction(RayRefraction):
                                         refracted_directions)
 
         return result_directions, tir_mask
+
+    def tir_update_fn(self, normal, l, mask_inter, n_prev, n_init):
+        """Get total internal reflection mask based on Snell's Law.
+
+        Args:
+            normal: surface normals
+        Returns:
+            total internal reflection mask
+        """
+        n_dict = {'air': 1.0, 'glass': 1.5, 'water': 1.33}
+
+        # Determine the next medium assuming there's no TIR
+        case1 = torch.logical_and(n_prev == n_dict['glass'], ~mask_inter)  # n_curr := water
+        case2 = torch.logical_and(n_prev == n_dict['glass'], mask_inter)  # n_curr := air
+        case3 = torch.logical_and(n_prev == n_dict['water'], ~mask_inter)  # n_curr := air
+        n_curr = torch.where(case1, n_dict['water'], n_init)
+        n_curr = torch.where(torch.logical_or(case2, case3), n_dict['air'], n_curr)
+
+        self.r = n_prev / n_curr
+
+        r = self.r  # a tensor of shape [4096]
+        l = l / torch.norm(l, p=2, dim=-1, keepdim=True)  # Normalize ray directions [4096, 256, 3]
+        c = -torch.einsum('ijk, ijk -> ij', normal, l)  # Cosine between normals and directions [4096, 256]
+        sqrt_term = 1 - (r[:, None] ** 2) * (1 - c ** 2)  # [4096, 256]
+        total_internal_reflection_mask = sqrt_term <= 0  # [4096, 256]
+        tir_mask = total_internal_reflection_mask.any(dim=-1)  # [4096]
+
+        return tir_mask
