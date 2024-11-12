@@ -24,6 +24,7 @@ import torch
 import trimesh
 import open3d as o3d
 from jaxtyping import Float, Int, Shaped
+from sympy.integrals.meijerint_doc import category
 from torch import Tensor
 
 from nerfstudio.field_components.ray_refraction import WaterBallRefraction, MeshRefraction, GlassCubeRefraction
@@ -37,13 +38,22 @@ TORCH_DEVICE = Union[str, torch.device]
 # mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/household_items/Vardagen_jar.ply')
 # mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/lab_equipment_set.ply')
 # mesh_water = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/beaker_water.ply')
-mesh_glass = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/syringe_glass.ply')
-mesh_water = trimesh.load_mesh('/home/projects/RefRef/mesh_files/lab_equipment/syringe_water.ply')
+
+# category_name = "simple_shapes"
+# category_name = "complex_shapes"
+category_name = "household_items"
+# category_name = "lab_equipment"
+ply_name = "plastic_bottle"
+mesh_glass = trimesh.load_mesh(f'/home/projects/RefRef/mesh_files/{category_name}/{ply_name}_plastic.ply')
+mesh_water = trimesh.load_mesh(f'/home/projects/RefRef/mesh_files/{category_name}/{ply_name}_water.ply')
+n_dict = {'air': 1.0, 'glass': 1.45, 'water': 1.333}
+BG_SHAPE = 'cube'
+if BG_SHAPE == 'cube':
+    BG_RADIUS = 0.42
+elif BG_SHAPE == 'sphere':
+    BG_RADIUS = 0.73
+
 IoR = 1.5
-n_dict = {'air': 1.0, 'glass': 1.5, 'water': 1.33}
-BG_SHAPE = 'sphere'
-# BG_RADIUS = 0.73
-BG_RADIUS = 0.42
 
 @dataclass
 class Frustums(TensorDataclass):
