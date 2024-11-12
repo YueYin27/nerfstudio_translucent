@@ -585,7 +585,44 @@ class NerfactoModel(Model):
         metrics_dict = {"psnr": float(psnr.item()), "ssim": float(ssim)}  # type: ignore
         metrics_dict["lpips"] = float(lpips)
 
-        images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth}
+         # Check if a mask exists in the batch
+        if "mask" in batch:
+        # Process each image and corresponding mask in the batch
+            mask = batch["mask"].to(self.device).float()
+            # print("mask:", mask.shape, mask.sum())
+            # print("gt_rgb", gt_rgb.shape)
+            mask = mask.permute(2, 0, 1).unsqueeze(0)   # Reshape to [1, 1, H, W] to match the image dimensions
+            # print(f"Expanded mask shape: {mask.shape}")
+
+            # Apply mask to ground truth and predicted images for the current image
+            masked_gt_rgb = image * mask
+            masked_predicted_rgb = rgb * mask
+            # save_dir = "/home/projects/u7543832/sdfstudio/masked_images"
+            # os.makedirs(save_dir, exist_ok=True)
+            # vutils.save_image(masked_gt_rgb, os.path.join(save_dir, "masked_gt_rgb.png"))
+            # vutils.save_image(masked_predicted_rgb, os.path.join(save_dir, "masked_predicted_rgb.png"))
+
+            # Ensure mask is not empty
+            if mask.sum() > 0:
+                # Compute masked PSNR for the current image
+                # masked_psnr = self.psnr(masked_gt_rgb, masked_predicted_rgb)
+                masked_ssim = self.ssim(masked_gt_rgb, masked_predicted_rgb)
+                masked_lpips = self.lpips(masked_gt_rgb, masked_predicted_rgb)
+                mask = mask.expand_as(image)
+                masked_gt_rgb = image[mask == 1]
+                masked_predicted_rgb = rgb[mask == 1]
+                mse = torch.mean((masked_gt_rgb - masked_predicted_rgb) ** 2)
+                masked_psnr = 10 * torch.log10((1 ** 2) / mse)
+            else:
+                print("Mask is empty, skipping PSNR computation for this image.")
+
+            # Compute the average masked PSNR for the batch and store it in the metrics dictionary
+            metrics_dict["masked_psnr"] = float(masked_psnr.item())
+            metrics_dict["masked_ssim"] = float(masked_ssim)
+            metrics_dict["masked_lpips"] = float(masked_lpips)
+
+
+        images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth, "depth_original": outputs["depth"]}
 
         for i in range(self.config.num_proposal_iterations):
             key = f"prop_depth_{i}"

@@ -91,3 +91,15 @@ PosixPath --> WindowsPath
 ns-render --load-config outputs\syringe\nerfacto\2023-05-14_225144\config.yml --traj filename --camera-path-filename renders/camera_path.json --output-path renders\data\customized\syringe_studio_frombg_sphere_trans_2023-05-14_225144.mp4
 
 ns-render --load-config outputs\waterball\nerfacto\2023-07-17_110815/config.yml --traj filename --camera-path-filename renders/camera_path.json --output-path renders\data\customized\waterball.mp4
+
+
+
+################################################### train ###################################################
+# finetune
+ns-train nerfacto --machine.device-type cuda --machine.num-devices 1 --experiment-name cube_coloured --project-name oracle --pipeline.model.background-color random --pipeline.model.proposal-initial-sampler uniform --pipeline.model.near-plane 0.05 --pipeline.model.far-plane 1.2 --pipeline.model.num_nerf_samples_per_ray 128 --pipeline.model.num_proposal_samples_per_ray 256 96 --pipeline.datamanager.camera-optimizer.mode off --pipeline.model.use-average-appearance-embedding False --pipeline.model.distortion-loss-mult 0.1 --pipeline.model.disable-scene-contraction True --optimizers.fields.optimizer.lr 0.00097 --optimizers.fields.scheduler.lr_final 0.0005 --load_checkpoint /root/nerfstudio_translucent/outputs/cube_coloured/nerfacto/2024-11-04_080120/nerfstudio_models/step-000007000.ckpt --save_only_latest_checkpoint False --steps_per_save 1000 --vis wandb --logging.local-writer.max-log-size=0 blender-depth-data --scale-factor 0.1 --data /workspace/RefRef/image_data/textured_cube_scene/simple_shapes/cube_coloured
+
+# train
+ns-train nerfacto --machine.device-type cuda --machine.num-devices 1 --experiment-name torus_coloured --project-name oracle --pipeline.model.background-color last_sample --pipeline.model.proposal-initial-sampler uniform --pipeline.model.near-plane 0.05 --pipeline.model.far-plane 1.2 --pipeline.model.num_nerf_samples_per_ray 128 --pipeline.model.num_proposal_samples_per_ray 256 96 --pipeline.datamanager.camera-optimizer.mode off --pipeline.model.use-average-appearance-embedding False --pipeline.model.distortion-loss-mult 0.1 --pipeline.model.disable-scene-contraction True --optimizers.fields.optimizer.lr 0.001 --optimizers.fields.scheduler.lr_final 0.0005 --save_only_latest_checkpoint False --steps_per_save 1000 --vis wandb --logging.local-writer.max-log-size=0 blender-depth-data --scale-factor 0.1 --data /workspace/RefRef/image_data/textured_sphere_scene/simple_shapes/torus_coloured
+
+--optimizers.fields.scheduler.warmup_steps 1000
+

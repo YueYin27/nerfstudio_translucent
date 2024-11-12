@@ -81,12 +81,14 @@ class BlenderDepth(DataParser):
         meta = load_from_json(self.data / f"transforms_{split}.json")
         image_filenames = []
         depth_filenames = []
+        mask_filenames = []
         poses = []
         for frame in meta["frames"]:
             fname = self.data / Path(frame["file_path"].replace("./", "") + ".png")
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
-
+            mask_fname = self.data / Path(frame["mask_file_path"].replace("./", ""))
+            mask_filenames.append(mask_fname)
             if "depth_file_path" in frame:
                 depth_filepath = PurePath(frame["depth_file_path"])
                 depth_fname = self._get_fname(depth_filepath, self.data, downsample_folder_prefix="depths_")
@@ -127,6 +129,7 @@ class BlenderDepth(DataParser):
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
+            mask_filenames=mask_filenames,
             alpha_color=alpha_color_tensor,
             scene_box=scene_box,
             dataparser_scale=self.scale_factor,

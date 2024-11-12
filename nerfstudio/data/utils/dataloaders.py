@@ -59,7 +59,7 @@ class CacheDataloader(DataLoader):
         **kwargs,
     ):
         if exclude_batch_keys_from_device is None:
-            exclude_batch_keys_from_device = ["image"]
+            exclude_batch_keys_from_device = ["image", "depth", "mask"]
         self.dataset = dataset
         assert isinstance(self.dataset, Sized)
 
@@ -191,7 +191,7 @@ class EvalDataloader(DataLoader):
         """
         ray_bundle = self.cameras.generate_rays(camera_indices=image_idx, keep_shape=True)
         batch = self.input_dataset[image_idx]
-        batch = get_dict_to_torch(batch, device=self.device, exclude=["image"])
+        batch = get_dict_to_torch(batch, device=self.device, exclude=["image", "depth", "mask"])
         assert isinstance(batch, dict)
         return ray_bundle, batch
 

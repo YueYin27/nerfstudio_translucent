@@ -422,48 +422,66 @@ class VanillaPipeline(Pipeline):
 
                 idx = batch['image_idx']
 
-                # # save depth map (replace transform_train/val.json to transform_test.json to get res on train/val set)
-                # # new_max = 5.0
-                # # TODO:
-                # new_max = 11.5
-                # new_min = 1.0
-                # old_max = 1
-                # old_min = 0
-                # scale_factor = 0.1
+                # if output_path is not None:
+                #     for key in images_dict.keys():
+                #         image = images_dict[key]  # [H, W, C] order
+                #         if key == "prop_depth_0" or key == "prop_depth_1":
+                #             continue
+                #         vutils.save_image(
+                #             image.permute(2, 0, 1).cpu(), output_path / f"{key}_{idx:04d}.png"
+                #         )
 
-                # # convert gt depth map back to world coordinate and then to distance map
-                # depth_gt = batch["depth_image"] / 0.0001 / 255.0  # ranging from 0 to 1
-                # depth_gt_world = new_min + (new_max - new_min) * (old_max - depth_gt) / (old_max - old_min)
-                # # print(depth_gt_world.max(), depth_gt_world.min())
+                # save depth map (replace transform_train/val.json to transform_test.json to get res on train/val set)
+                # TODO:
+                new_max = 11.5
+                new_min = 1.0
+                old_max = 1
+                old_min = 0
+                scale_factor = 0.1
+
+                # convert gt depth map back to world coordinate and then to distance map
+                depth_gt = batch["depth"] / 255.0  # ranging from 0 to 1
+                depth_gt_world = new_min + (new_max - new_min) * (old_max - depth_gt) / (old_max - old_min)
+                # print(depth_gt_world.max(), depth_gt_world.min())
+                depth_gt_world = depth_gt_world.to('cuda')
+                directions_norm = camera_ray_bundle.metadata["directions_norm"].to('cuda')
+
+                distance_gt = depth_gt_world * directions_norm
+
                 # distance_gt = depth_gt_world * camera_ray_bundle.metadata["directions_norm"]  # depth -> distance
-                # # print(distance_gt.max(), distance_gt.min())
+                # print(distance_gt.max(), distance_gt.min())
 
-                # # convert predicted distance map to world coordinate
-                # distance_pred = outputs["depth"].to(torch.float64)
-                # distance_pred /= scale_factor
+                # convert predicted distance map to world coordinate
+                distance_pred = images_dict["depth_original"].to(torch.float64)
+                distance_pred /= scale_factor
 
-                # # metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
-                # #     ground_truth_depth[depth_mask], predicted_depth[depth_mask])
-                # metrics_dict["distance_l1"] = torch.nn.functional.l1_loss(distance_gt, distance_pred)
+                # metrics_dict["depth_mse"] = torch.nn.functional.mse_loss(
+                #     ground_truth_depth[depth_mask], predicted_depth[depth_mask])
+                distance_gt = distance_gt.to('cuda')
+                distance_pred = distance_pred.to('cuda')  # Move distance_pred to the same device as distance_gt
+                # print("distance_pred.max(),distance_gt.max()", distance_pred.max(), distance_gt.max())
+                # print("distance_pred.min(),distance_gt.min()", distance_pred.min(), distance_gt.min())
+                metrics_dict["distance_l1"] = torch.nn.functional.l1_loss(distance_gt, distance_pred)
 
-                # # normalise distance maps between (0, 1)
-                # white, black = 1.0, 0.0
-                # distance_gt_normalised = black + (white - black) * (new_max - distance_gt) / \
-                #                          (new_max - new_min)
-                # distance_pred_normalised = black + (white - black) * (new_max - distance_pred) / \
-                #                            (new_max - new_min)
+                # normalise distance maps between (0, 1)
+                white, black = 1.0, 0.0
+                distance_gt_normalised = black + (white - black) * (new_max - distance_gt) / \
+                                         (new_max - new_min)
+                distance_pred_normalised = black + (white - black) * (new_max - distance_pred) / \
+                                           (new_max - new_min)
 
-                # depth_dir = os.path.join(output_dir, 'depth_maps/test_NEW_sigma_25')
-                # if not os.path.exists(depth_dir):
-                #     os.makedirs(depth_dir)
-                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
-                #            distance_gt_normalised.cpu().squeeze().numpy(), cmap='gray')
-                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_pred.png'),
-                #            distance_pred_normalised.cpu().squeeze().numpy(), cmap='gray')
-
+                depth_dir = os.path.join(output_dir, 'depth_maps')
+                if not os.path.exists(depth_dir):
+                    os.makedirs(depth_dir)
+                # plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth.png'),
+                #            batch["depth"].cpu().squeeze().numpy(), cmap='gray')
+                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_gt.png'),
+                           distance_gt_normalised.cpu().squeeze().numpy(), cmap='gray')
+                plt.imsave(os.path.join(depth_dir, 'r_' + str(idx) + '_depth_pred.png'),
+                           distance_pred_normalised.cpu().squeeze().numpy(), cmap='gray')
                 # save rgb images
                 rgb_img = images_dict['img'].cpu().numpy()
-                rgb_dir = os.path.join(output_dir, 'rgb_images/test')
+                rgb_dir = os.path.join(output_dir, 'rgb_images/')
                 if not os.path.exists(rgb_dir):
                     os.makedirs(rgb_dir)
                 plt.imsave(os.path.join(rgb_dir, 'r_' + str(idx) + '.png'), rgb_img)

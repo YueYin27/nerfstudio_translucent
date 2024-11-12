@@ -111,6 +111,9 @@ class InputDataset(Dataset):
             assert (
                 data["mask"].shape[:2] == data["image"].shape[:2]
             ), f"Mask and image have different shapes. Got {data['mask'].shape[:2]} and {data['image'].shape[:2]}"
+        if self._dataparser_outputs.metadata is not None:
+            depth_filepath = self._dataparser_outputs.metadata["depth_filenames"][image_idx]
+            data["depth"] = get_depth_image_from_path(filepath=depth_filepath, height=800, width=800, scale_factor=self.scale_factor)
         metadata = self.get_metadata(data)
         data.update(metadata)
         return data
